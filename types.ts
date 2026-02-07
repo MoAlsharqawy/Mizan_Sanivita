@@ -13,11 +13,14 @@ export type Role = 'ADMIN' | 'USER';
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED';
 
 export interface BaseEntity {
-    company_id?: string; // Optional for now, will be mandatory later
+    company_id?: string; // Multi-tenancy root
     branch_id?: string;
     sync_status?: SyncStatus;
     created_at?: string;
     updated_at?: string;
+    updated_by?: string; // Audit: Who made the last change
+    is_deleted?: boolean; // Soft Delete
+    deleted_at?: string;
 }
 
 export interface User extends BaseEntity {

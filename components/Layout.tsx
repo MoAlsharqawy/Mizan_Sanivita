@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Package, Users, FileText, Settings, CreditCard, Truck, Briefcase, Warehouse, Menu, X, BarChart3, LogOut, ChevronDown, ChevronRight, TrendingUp, Phone, Plus, Award, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, Users, FileText, Settings, CreditCard, Truck, Briefcase, Warehouse, Menu, X, BarChart3, LogOut, ChevronDown, ChevronRight, TrendingUp, Phone, Plus, Award, ShieldAlert, Cloud, CloudOff, RefreshCw } from 'lucide-react';
 import { t, isRTL } from '../utils/t';
 import { authService } from '../services/auth';
+import { syncService } from '../services/sync';
+import { db } from '../services/db';
 
 interface LayoutProps {
     children?: React.ReactNode;
@@ -13,9 +16,38 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [expandedMenus, setExpandedMenus] = useState<string[]>(['/reports']); 
+  const [pendingCount, setPendingCount] = useState(0);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  
   const rtl = isRTL();
   const dir = rtl ? 'rtl' : 'ltr';
   const user = authService.getCurrentUser();
+
+  // Monitor Sync Queue & Online Status
+  useEffect(() => {
+      const checkQueue = async () => {
+          const count = await db.queue.where('status').equals('PENDING').count();
+          setPendingCount(count);
+      };
+      
+      const interval = setInterval(checkQueue, 5000);
+      checkQueue();
+
+      const handleOnline = () => setIsOnline(true);
+      const handleOffline = () => setIsOnline(false);
+      window.addEventListener('online', handleOnline);
+      window.addEventListener('offline', handleOffline);
+
+      return () => {
+          clearInterval(interval);
+          window.removeEventListener('online', handleOnline);
+          window.removeEventListener('offline', handleOffline);
+      };
+  }, []);
+
+  const handleManualSync = () => {
+      syncService.sync();
+  };
 
   const allNavs = [
     { label: t('nav.dashboard'), path: '/', icon: LayoutDashboard, perm: 'VIEW_DASHBOARD' },
@@ -118,7 +150,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             {navs.map((item) => {
                 if (item.children) {
                     const isExpanded = expandedMenus.includes(item.path);
-                    // Check if any child is active
                     const isActiveParent = item.children.some(child => isActive(child.path)) || location.pathname.startsWith(item.path);
                     
                     return (
@@ -136,7 +167,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                                 {isExpanded ? <ChevronDown className="w-4 h-4 opacity-50" /> : rtl ? <ChevronDown className="w-4 h-4 opacity-50 rotate-90" /> : <ChevronRight className="w-4 h-4 opacity-50" />}
                             </div>
                             
-                            {/* Submenu */}
                             <div className={`overflow-hidden transition-all duration-300 ${isExpanded ? 'max-h-48 opacity-100 mt-1' : 'max-h-0 opacity-0'}`}>
                                 <ul className={`space-y-1 ${rtl ? 'pr-8' : 'pl-8'}`}>
                                     {item.children.map(child => (
@@ -222,6 +252,21 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </div>
 
           <div className="flex items-center space-x-4 rtl:space-x-reverse hidden sm:flex">
+             {/* Sync Status Indicator */}
+             <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-full border border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors" onClick={handleManualSync}>
+                 {isOnline ? <Cloud className="w-4 h-4 text-emerald-500" /> : <CloudOff className="w-4 h-4 text-slate-400" />}
+                 <span className="text-xs font-bold text-slate-600">
+                     {pendingCount > 0 ? (
+                         <span className="flex items-center gap-1 text-orange-600">
+                             <RefreshCw className="w-3 h-3 animate-spin" />
+                             Syncing ({pendingCount})
+                         </span>
+                     ) : (
+                         isOnline ? 'Synced' : 'Offline'
+                     )}
+                 </span>
+             </div>
+
              <div className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-medium border border-blue-100">
                  {new Date().toLocaleDateString()}
              </div>
