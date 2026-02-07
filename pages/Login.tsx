@@ -2,25 +2,35 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/auth';
-import { Lock, User, ArrowRight, Loader2, ShieldCheck, Phone } from 'lucide-react';
+import { Lock, User, ArrowRight, Loader2, ShieldCheck, Phone, Building2 } from 'lucide-react';
 
 export default function Login() {
   const navigate = useNavigate();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      await authService.login(username, password);
+      if (isSignUp) {
+          await authService.signup(email, password, companyName || 'My Business');
+          // Auto login after signup in this logic (or user might need to confirm email depending on Supabase settings)
+          await authService.login(email, password);
+      } else {
+          await authService.login(email, password);
+      }
       navigate('/');
-    } catch (err) {
-      setError('Invalid username or password');
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Authentication failed');
     } finally {
       setLoading(false);
     }
@@ -42,24 +52,24 @@ export default function Login() {
             <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
                 <span className="text-3xl font-bold text-white">M</span>
             </div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">Welcome Back</h1>
-            <p className="text-slate-400 text-sm mt-2">Enter your credentials to access Mizan Online</p>
+            <h1 className="text-2xl font-bold text-white tracking-tight">{isSignUp ? 'Create Account' : 'Welcome Back'}</h1>
+            <p className="text-slate-400 text-sm mt-2">{isSignUp ? 'Start your business journey' : 'Sign in to sync your data'}</p>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5 ml-1">Username</label>
+              <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5 ml-1">Email</label>
               <div className="relative group">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <User className="h-5 w-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
                 </div>
                 <input
-                  type="text"
+                  type="email"
                   required
                   className="w-full pl-11 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  placeholder="Enter username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="name@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                 />
               </div>
             </div>
@@ -81,6 +91,25 @@ export default function Login() {
               </div>
             </div>
 
+            {isSignUp && (
+                <div className="animate-in fade-in slide-in-from-top-2">
+                    <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5 ml-1">Company Name</label>
+                    <div className="relative group">
+                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                        <Building2 className="h-5 w-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
+                        </div>
+                        <input
+                        type="text"
+                        required
+                        className="w-full pl-11 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                        placeholder="My Business LLC"
+                        value={companyName}
+                        onChange={(e) => setCompanyName(e.target.value)}
+                        />
+                    </div>
+                </div>
+            )}
+
             {error && (
               <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm text-center flex items-center justify-center gap-2 animate-in fade-in slide-in-from-top-2">
                 <ShieldCheck className="w-4 h-4" />
@@ -97,16 +126,19 @@ export default function Login() {
                 <Loader2 className="w-5 h-5 animate-spin" />
               ) : (
                 <>
-                  Sign In <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                  {isSignUp ? 'Create Account' : 'Sign In'} <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </>
               )}
             </button>
           </form>
 
-          <div className="mt-8 text-center">
-             <div className="inline-block px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-400">
-                Demo: <b>admin / 123</b> or <b>user / 123</b>
-             </div>
+          <div className="mt-6 text-center">
+             <button 
+                onClick={() => { setIsSignUp(!isSignUp); setError(''); }}
+                className="text-sm text-slate-400 hover:text-white underline transition-colors"
+             >
+                 {isSignUp ? 'Already have an account? Sign In' : 'Need an account? Sign Up'}
+             </button>
           </div>
         </div>
         
@@ -114,10 +146,6 @@ export default function Login() {
             <p className="flex items-center gap-2 justify-center">
                 Powered by <span className="font-bold text-slate-400">Mizan Sales</span> &copy; 2026
             </p>
-            <div className="flex items-center gap-1.5 bg-white/5 px-3 py-1 rounded-full border border-white/5">
-                <Phone className="w-3 h-3 text-blue-400" />
-                <span dir="ltr" className="font-mono text-slate-400 tracking-wide">01559550481</span>
-            </div>
         </div>
       </div>
     </div>

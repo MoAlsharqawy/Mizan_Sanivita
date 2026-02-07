@@ -6,7 +6,6 @@ import { QueueItem } from '../types';
 /**
  * The Sync Engine
  * Handles pushing local offline changes to the Supabase server.
- * Uses RPC calls for transactional integrity (Inventory + Invoice).
  */
 
 class SyncService {
@@ -15,6 +14,14 @@ class SyncService {
     async sync() {
         if (this.isSyncing || !isSupabaseConfigured() || !navigator.onLine) return;
         
+        // CRITICAL CHECK: Do we have a valid session?
+        if (!supabase) return;
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+            console.warn("Sync paused: No active Supabase session.");
+            return;
+        }
+
         this.isSyncing = true;
         console.log('🔄 Sync Started...');
 
@@ -23,7 +30,7 @@ class SyncService {
             const pendingItems = await db.queue
                 .where('status')
                 .equals('PENDING')
-                .limit(50) // Process in chunks
+                .limit(50) 
                 .toArray();
 
             if (pendingItems.length === 0) {
@@ -47,41 +54,38 @@ class SyncService {
         try {
             let success = false;
 
+            // Simple exponential backoff or retry limit check
+            if (item.retries && item.retries > 5) {
+                await db.queue.update(item.id!, { status: 'FAILED', error_log: 'Max retries exceeded' });
+                return;
+            }
+
             if (item.action_type === 'CREATE_INVOICE') {
                 success = await this.pushInvoice(item.payload);
             } else if (item.action_type === 'UPDATE_CUSTOMER') {
                 success = await this.pushCustomerUpdate(item.payload);
             }
-            // Add other handlers here...
 
             if (success) {
                 await db.queue.update(item.id!, { status: 'SYNCED' });
             } else {
-                // Exponential backoff logic could go here
                 await db.queue.update(item.id!, { 
                     retries: (item.retries || 0) + 1,
-                    // If retries > 5, mark FAILED?
                 });
             }
 
         } catch (err: any) {
             console.error(`Failed to process queue item ${item.id}:`, err);
             await db.queue.update(item.id!, { 
-                error_log: err.message,
+                error_log: err.message || 'Unknown error',
                 retries: (item.retries || 0) + 1
             });
         }
     }
 
-    /**
-     * Pushes a full invoice transaction using a server-side RPC.
-     * This ensures stock is deducted only if the invoice is created successfully.
-     */
     private async pushInvoice(invoice: any): Promise<boolean> {
         if (!supabase) return false;
 
-        // Prepare payload for the RPC function
-        // We map local types to what the PostgreSQL function expects
         const payload = {
             p_invoice_id: invoice.id,
             p_customer_id: invoice.customer_id,
@@ -100,11 +104,11 @@ class SyncService {
             }))
         };
 
-        const { data, error } = await supabase.rpc('sync_invoice_transaction', payload);
+        const { error } = await supabase.rpc('sync_invoice_transaction', payload);
 
         if (error) {
             console.error('RPC Error:', error);
-            // If error is "Duplicate key", we might want to mark as SYNCED because it's already there
+            // Handle "Duplicate key" as success to avoid loops
             if (error.message.includes('unique constraint') || error.code === '23505') {
                 return true; 
             }
@@ -117,7 +121,7 @@ class SyncService {
     private async pushCustomerUpdate(customer: any): Promise<boolean> {
         if (!supabase) return false;
         
-        // Remove local-only fields if any
+        // This relies on RLS policies allowing update to own company customers
         const { error } = await supabase
             .from('customers')
             .upsert({
@@ -128,16 +132,15 @@ class SyncService {
                 updated_at: new Date().toISOString()
             });
 
+        if (error) console.error("Customer Sync Error", error);
         return !error;
     }
 }
 
 export const syncService = new SyncService();
 
-// Auto-sync interval (e.g. every 30 seconds when online)
 setInterval(() => {
     syncService.sync();
 }, 30000);
 
-// Also sync immediately when coming online
 window.addEventListener('online', () => syncService.sync());

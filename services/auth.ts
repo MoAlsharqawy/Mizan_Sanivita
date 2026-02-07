@@ -1,3 +1,5 @@
+
+import { supabase } from './supabase';
 import { User } from '../types';
 
 export const PERMISSIONS = [
@@ -16,76 +18,52 @@ export const PERMISSIONS = [
 
 const ALL_PERMISSIONS_IDS = PERMISSIONS.map(p => p.id);
 
-const DEFAULT_USERS = [
-  { 
-      id: '1', 
-      username: 'admin', 
-      password: '123', 
-      name: 'General Manager', 
-      role: 'ADMIN', 
-      avatar: 'M',
-      permissions: ALL_PERMISSIONS_IDS
-  },
-  { 
-      id: '2', 
-      username: 'sup1', 
-      password: '123', 
-      name: 'Supervisor East', 
-      role: 'USER', 
-      avatar: 'S1',
-      permissions: ALL_PERMISSIONS_IDS 
-  },
-  { 
-      id: '3', 
-      username: 'sup2', 
-      password: '123', 
-      name: 'Supervisor West', 
-      role: 'USER', 
-      avatar: 'S2',
-      permissions: ALL_PERMISSIONS_IDS 
-  },
-  { 
-      id: '4', 
-      username: 'sup3', 
-      password: '123', 
-      name: 'Supervisor North', 
-      role: 'USER', 
-      avatar: 'S3',
-      permissions: ALL_PERMISSIONS_IDS 
-  }
-];
-
-const loadUsers = (): any[] => {
-  const stored = localStorage.getItem('app_users');
-  if (stored) return JSON.parse(stored);
-  // Seed default users if empty
-  localStorage.setItem('app_users', JSON.stringify(DEFAULT_USERS));
-  return DEFAULT_USERS;
-};
-
 export const authService = {
-  login: (username: string, password: string): Promise<User> => {
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        const users = loadUsers();
-        const user = users.find((u: any) => u.username === username && u.password === password);
-        if (user) {
-          const { password, ...safeUser } = user;
-          localStorage.setItem('user', JSON.stringify(safeUser));
-          resolve(safeUser as User);
-        } else {
-          reject(new Error('Invalid credentials'));
-        }
-      }, 800); // Fake delay
+  // Login with Supabase
+  login: async (email: string, password: string): Promise<User> => {
+    if (!supabase) throw new Error("Supabase not configured");
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
     });
+
+    if (error) throw error;
+    if (!data.user) throw new Error("No user returned");
+
+    // Check if profile exists, if not, initialize the account
+    await authService.ensureAccountSetup(data.user.id, email);
+
+    return authService.transformUser(data.user);
   },
 
-  logout: () => {
+  // Register new user (Creates Company + Profile)
+  signup: async (email: string, password: string, companyName: string): Promise<void> => {
+      if (!supabase) throw new Error("Supabase not configured");
+
+      const { data, error } = await supabase.auth.signUp({
+          email,
+          password
+      });
+
+      if (error) throw error;
+      if (data.user) {
+          // Note: If email confirmation is enabled in Supabase, this might run before the user confirms.
+          // For this demo, we assume auto-confirm or we handle it on login.
+          await authService.ensureAccountSetup(data.user.id, email, companyName);
+      }
+  },
+
+  logout: async () => {
+    if (supabase) await supabase.auth.signOut();
     localStorage.removeItem('user');
+    localStorage.removeItem('sb-access-token'); // Clear Supabase tokens if stored manually
+    localStorage.removeItem('sb-refresh-token');
     window.location.href = '/#/login';
   },
 
   getCurrentUser: (): User | null => {
+    // We still use localStorage for fast UI rendering, but the source of truth is Supabase
     const u = localStorage.getItem('user');
     return u ? JSON.parse(u) : null;
   },
@@ -98,49 +76,82 @@ export const authService = {
       const userString = localStorage.getItem('user');
       if (!userString) return false;
       const user = JSON.parse(userString) as User;
-      
-      // ADMIN role generally has all permissions
       if (user.role === 'ADMIN') return true;
-      
       return user.permissions?.includes(permissionId) || false;
   },
 
-  // --- User Management Methods ---
-  getUsers: (): any[] => {
-    return loadUsers().map(({ password, ...u }) => ({
-        ...u,
-        permissions: u.permissions || [] // Ensure permissions array exists
-    }));
-  },
+  // Helper: Ensures the user has a Company and Profile in SQL
+  ensureAccountSetup: async (userId: string, email: string, newCompanyName: string = 'My Company') => {
+      if (!supabase) return;
 
-  saveUser: (user: any) => {
-      const users = loadUsers();
-      // Ensure permissions exist
-      if (!user.permissions) user.permissions = [];
-      
-      if (user.id) {
-          // Edit
-          const idx = users.findIndex((u: any) => u.id === user.id);
-          if (idx !== -1) {
-             const updatedUser = { ...users[idx], ...user };
-             // If password field is empty during edit, preserve old password
-             if (!user.password) {
-                 updatedUser.password = users[idx].password;
-             }
-             updatedUser.avatar = updatedUser.name.charAt(0).toUpperCase();
-             users[idx] = updatedUser;
-          }
-      } else {
-          // Add
-          user.id = Date.now().toString();
-          user.avatar = user.name.charAt(0).toUpperCase();
-          users.push(user);
+      // 1. Check Profile
+      const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).single();
+
+      if (profile) {
+          // User exists, update local storage
+          const userObj = {
+              id: userId,
+              username: email,
+              name: profile.full_name || email.split('@')[0],
+              role: profile.role || 'USER',
+              company_id: profile.company_id,
+              permissions: ALL_PERMISSIONS_IDS // For now, give all permissions
+          };
+          localStorage.setItem('user', JSON.stringify(userObj));
+          return;
       }
-      localStorage.setItem('app_users', JSON.stringify(users));
+
+      // 2. No Profile? Create Company + Profile (Bootstrap)
+      console.log("Bootstrapping new account...");
+      
+      // A. Create Company
+      const { data: company, error: companyError } = await supabase
+          .from('companies')
+          .insert({ name: newCompanyName })
+          .select()
+          .single();
+
+      if (companyError || !company) throw new Error("Failed to create company: " + companyError?.message);
+
+      // B. Create Profile linked to Company
+      const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+              id: userId,
+              company_id: company.id,
+              role: 'ADMIN',
+              full_name: email.split('@')[0]
+          });
+
+      if (profileError) throw new Error("Failed to create profile: " + profileError.message);
+
+      // C. Save to Local Storage
+      const userObj = {
+          id: userId,
+          username: email,
+          name: email.split('@')[0],
+          role: 'ADMIN',
+          company_id: company.id,
+          permissions: ALL_PERMISSIONS_IDS
+      };
+      localStorage.setItem('user', JSON.stringify(userObj));
   },
 
-  deleteUser: (id: string) => {
-      const users = loadUsers().filter((u: any) => u.id !== id);
-      localStorage.setItem('app_users', JSON.stringify(users));
-  }
+  transformUser: (sbUser: any): User => {
+      // Helper to match types
+      return {
+          id: sbUser.id,
+          username: sbUser.email,
+          name: sbUser.email.split('@')[0],
+          role: 'USER' // Default, will be overwritten by local storage load
+      };
+  },
+
+  getUsers: (): any[] => {
+      // For now, return mock users if offline, or implement fetching from Supabase 'profiles' table if needed
+      return []; 
+  },
+  
+  saveUser: (user: any) => {}, // Disabled for now in real auth mode
+  deleteUser: (id: string) => {}
 };
