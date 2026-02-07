@@ -1,8 +1,9 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/auth';
-import { Lock, User, ArrowRight, Loader2, ShieldCheck, Phone, Building2 } from 'lucide-react';
+import { configureSupabase, isSupabaseConfigured, clearSupabaseConfig } from '../services/supabase';
+import { Lock, User, ArrowRight, Loader2, ShieldCheck, Phone, Building2, Settings, Database, Save, X } from 'lucide-react';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -14,6 +15,20 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Configuration Modal State
+  const [showConfig, setShowConfig] = useState(false);
+  const [configUrl, setConfigUrl] = useState('');
+  const [configKey, setConfigKey] = useState('');
+
+  // Check configuration on mount
+  useEffect(() => {
+      if (!isSupabaseConfigured()) {
+          // If not configured via env vars, force open the manual config
+          setShowConfig(true);
+          setError("Connection missing. Please configure Supabase details.");
+      }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -22,7 +37,7 @@ export default function Login() {
     try {
       if (isSignUp) {
           await authService.signup(email, password, companyName || 'My Business');
-          // Auto login after signup in this logic (or user might need to confirm email depending on Supabase settings)
+          // Auto login after signup
           await authService.login(email, password);
       } else {
           await authService.login(email, password);
@@ -30,10 +45,24 @@ export default function Login() {
       navigate('/');
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Authentication failed');
+      if (err.message.includes("Supabase not configured")) {
+          setError("System error: Database connection not set.");
+          setShowConfig(true);
+      } else {
+          setError(err.message || 'Authentication failed');
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSaveConfig = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!configUrl || !configKey) {
+          alert("URL and Key are required");
+          return;
+      }
+      configureSupabase(configUrl, configKey);
   };
 
   return (
@@ -43,6 +72,17 @@ export default function Login() {
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0">
           <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600 rounded-full mix-blend-overlay filter blur-[120px] opacity-20 animate-pulse"></div>
           <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-600 rounded-full mix-blend-overlay filter blur-[120px] opacity-20 animate-pulse" style={{animationDelay: '2s'}}></div>
+      </div>
+
+      {/* Config Button (Top Right) */}
+      <div className="absolute top-4 right-4 z-50">
+          <button 
+            onClick={() => setShowConfig(true)}
+            className="p-2 text-slate-500 hover:text-white transition-colors rounded-full hover:bg-white/10"
+            title="Database Configuration"
+          >
+              <Settings className="w-6 h-6" />
+          </button>
       </div>
 
       <div className="w-full max-w-md p-8 relative z-10">
@@ -148,6 +188,69 @@ export default function Login() {
             </p>
         </div>
       </div>
+
+      {/* CONFIGURATION MODAL */}
+      {showConfig && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
+              <div className="bg-slate-900 border border-slate-700 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
+                  <div className="p-6 border-b border-slate-800 flex justify-between items-center">
+                      <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                          <Database className="w-5 h-5 text-blue-500" /> Connection Setup
+                      </h3>
+                      <button onClick={() => setShowConfig(false)} className="text-slate-400 hover:text-white">
+                          <X className="w-5 h-5" />
+                      </button>
+                  </div>
+                  
+                  <div className="p-6 space-y-6">
+                      <p className="text-slate-400 text-sm">
+                          Enter your Supabase project credentials. These are stored locally in your browser.
+                      </p>
+                      
+                      <form onSubmit={handleSaveConfig} className="space-y-4">
+                          <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Project URL</label>
+                              <input 
+                                  type="text" 
+                                  required
+                                  placeholder="https://your-project.supabase.co"
+                                  className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none"
+                                  value={configUrl}
+                                  onChange={e => setConfigUrl(e.target.value)}
+                              />
+                          </div>
+                          <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Anon / Public Key</label>
+                              <input 
+                                  type="text" 
+                                  required
+                                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI..."
+                                  className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none font-mono text-xs"
+                                  value={configKey}
+                                  onChange={e => setConfigKey(e.target.value)}
+                              />
+                          </div>
+
+                          <div className="pt-2 flex gap-3">
+                              <button 
+                                type="button"
+                                onClick={clearSupabaseConfig}
+                                className="px-4 py-3 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg text-sm font-bold hover:bg-red-500/20"
+                              >
+                                  Reset
+                              </button>
+                              <button 
+                                type="submit"
+                                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2"
+                              >
+                                  <Save className="w-4 h-4" /> Save & Reload
+                              </button>
+                          </div>
+                      </form>
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 }
