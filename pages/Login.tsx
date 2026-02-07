@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/auth';
 import { configureSupabase, isSupabaseConfigured, clearSupabaseConfig } from '../services/supabase';
-import { Lock, User, ArrowRight, Loader2, ShieldCheck, Phone, Building2, Settings, Database, Save, X } from 'lucide-react';
+import { Lock, User, ArrowRight, Loader2, ShieldCheck, Phone, Building2, Settings, Database, Save, X, AlertTriangle } from 'lucide-react';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -45,11 +45,17 @@ export default function Login() {
       navigate('/');
     } catch (err: any) {
       console.error(err);
-      if (err.message.includes("Supabase not configured")) {
+      const msg = err.message || '';
+      
+      if (msg.includes("Supabase not configured")) {
           setError("System error: Database connection not set.");
           setShowConfig(true);
+      } else if (msg.includes("violates row-level security") || msg.includes("permission denied")) {
+          setError("Database Permission Error: Please run the SQL setup script in Supabase Dashboard.");
+      } else if (msg.includes("rate limit")) {
+          setError("Too many attempts. Please wait a moment or try logging in if you already created an account.");
       } else {
-          setError(err.message || 'Authentication failed');
+          setError(msg || 'Authentication failed');
       }
     } finally {
       setLoading(false);
@@ -152,8 +158,8 @@ export default function Login() {
 
             {error && (
               <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm text-center flex items-center justify-center gap-2 animate-in fade-in slide-in-from-top-2">
-                <ShieldCheck className="w-4 h-4" />
-                {error}
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
               </div>
             )}
 
