@@ -18,7 +18,15 @@ class SyncService {
         if (!supabase) return;
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) {
-            console.warn("Sync paused: No active Supabase session.");
+            return;
+        }
+
+        // Check if local user has company_id before trying to sync to avoid RPC errors
+        const userStr = localStorage.getItem('user');
+        if (!userStr) return;
+        const user = JSON.parse(userStr);
+        if (!user.company_id) {
+            // User is logged in but profile/company setup isn't complete on local device yet
             return;
         }
 

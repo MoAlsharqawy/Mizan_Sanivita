@@ -48,8 +48,6 @@ export const authService = {
 
       if (error) throw error;
       if (data.user) {
-          // Note: If email confirmation is enabled in Supabase, this might run before the user confirms.
-          // For this demo, we assume auto-confirm or we handle it on login.
           await authService.ensureAccountSetup(data.user.id, email, companyName);
       }
   },
@@ -57,13 +55,12 @@ export const authService = {
   logout: async () => {
     if (supabase) await supabase.auth.signOut();
     localStorage.removeItem('user');
-    localStorage.removeItem('sb-access-token'); // Clear Supabase tokens if stored manually
+    localStorage.removeItem('sb-access-token'); 
     localStorage.removeItem('sb-refresh-token');
     window.location.href = '/#/login';
   },
 
   getCurrentUser: (): User | null => {
-    // We still use localStorage for fast UI rendering, but the source of truth is Supabase
     const u = localStorage.getItem('user');
     return u ? JSON.parse(u) : null;
   },
@@ -84,8 +81,8 @@ export const authService = {
   ensureAccountSetup: async (userId: string, email: string, newCompanyName: string = 'My Company') => {
       if (!supabase) return;
 
-      // 1. Check Profile
-      const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      // 1. Check Profile - Use maybeSingle() to avoid 406 error on empty result
+      const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
 
       if (profile) {
           // User exists, update local storage
@@ -95,7 +92,7 @@ export const authService = {
               name: profile.full_name || email.split('@')[0],
               role: profile.role || 'USER',
               company_id: profile.company_id,
-              permissions: ALL_PERMISSIONS_IDS // For now, give all permissions
+              permissions: ALL_PERMISSIONS_IDS 
           };
           localStorage.setItem('user', JSON.stringify(userObj));
           return;
@@ -111,7 +108,15 @@ export const authService = {
           .select()
           .single();
 
-      if (companyError || !company) throw new Error("Failed to create company: " + companyError?.message);
+      if (companyError) {
+          console.error("Company Creation Error:", companyError);
+          if (companyError.code === '42501' || companyError.message.includes('violates row-level security')) {
+              throw new Error("Database Permission Error: Please run the SQL setup script in Supabase Dashboard to allow company creation.");
+          }
+          throw new Error("Failed to create company: " + companyError.message);
+      }
+
+      if (!company) throw new Error("Failed to create company data.");
 
       // B. Create Profile linked to Company
       const { error: profileError } = await supabase
@@ -123,7 +128,10 @@ export const authService = {
               full_name: email.split('@')[0]
           });
 
-      if (profileError) throw new Error("Failed to create profile: " + profileError.message);
+      if (profileError) {
+          console.error("Profile Creation Error:", profileError);
+          throw new Error("Failed to create profile: " + profileError.message);
+      }
 
       // C. Save to Local Storage
       const userObj = {
@@ -138,20 +146,18 @@ export const authService = {
   },
 
   transformUser: (sbUser: any): User => {
-      // Helper to match types
       return {
           id: sbUser.id,
           username: sbUser.email,
           name: sbUser.email.split('@')[0],
-          role: 'USER' // Default, will be overwritten by local storage load
+          role: 'USER' 
       };
   },
 
   getUsers: (): any[] => {
-      // For now, return mock users if offline, or implement fetching from Supabase 'profiles' table if needed
       return []; 
   },
   
-  saveUser: (user: any) => {}, // Disabled for now in real auth mode
+  saveUser: (user: any) => {}, 
   deleteUser: (id: string) => {}
 };

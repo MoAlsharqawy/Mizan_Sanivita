@@ -51,9 +51,9 @@ export default function Login() {
           setError("System error: Database connection not set.");
           setShowConfig(true);
       } else if (msg.includes("violates row-level security") || msg.includes("permission denied")) {
-          setError("Database Permission Error: Please run the SQL setup script in Supabase Dashboard.");
-      } else if (msg.includes("rate limit")) {
-          setError("Too many attempts. Please wait a moment or try logging in if you already created an account.");
+          setError("Database Permission Error: Please run the SQL setup script in Supabase Dashboard to fix RLS policies.");
+      } else if (msg.includes("rate limit") || msg.includes("429")) {
+          setError("Too many attempts. Please create the user manually in Supabase Dashboard -> Authentication -> Users, then come back here and Sign In.");
       } else {
           setError(msg || 'Authentication failed');
       }
