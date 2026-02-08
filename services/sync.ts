@@ -116,21 +116,45 @@ class SyncService {
 
         if (error) {
             console.error('RPC Error:', error);
+
+            // --- HANDLING 1: Foreign Key Violation (Missing Customer) ---
+            // Code 23503: insert or update on table "invoices" violates foreign key constraint
+            if (error.code === '23503') {
+                console.warn(`Sync failed due to missing dependency (Customer: ${invoice.customer_id}). Attempting JIT sync...`);
+                
+                // 1. Fetch Customer from Local DB
+                const localCustomer = await db.customers.get(invoice.customer_id);
+                
+                if (localCustomer) {
+                    // 2. Force Sync Customer
+                    const custSuccess = await this.pushCustomerUpdate(localCustomer);
+                    
+                    if (custSuccess) {
+                        console.log("JIT Customer Sync Successful. Retrying Invoice Sync...");
+                        // 3. Recursive Retry (One level deep effectively)
+                        return this.pushInvoice(invoice);
+                    }
+                } else {
+                    console.error("Critical: Referenced customer not found in local DB.");
+                }
+                return false; // Fail this attempt so it retries later
+            }
             
-            // Robust Idempotency Check:
-            // Handle "Duplicate key", "Unique constraint", or 409 Conflict as success
+            // --- HANDLING 2: Idempotency (Duplicates) ---
+            // Code 23505: Duplicate Key
+            // We treat this as success to unblock queue
             if (
                 error.code === '23505' || 
                 error.message?.toLowerCase().includes('unique') || 
-                error.message?.toLowerCase().includes('duplicate') ||
-                (error as any).status === 409
+                error.message?.toLowerCase().includes('duplicate')
             ) {
                 console.warn(`Sync for invoice ${invoice.invoice_number} treated as success (Duplicate/Idempotent).`);
                 return true; 
             }
 
-            // Fallback Strategy:
-            // If the RPC function is missing (404/PGRST202), try direct table insertion
+            // --- HANDLING 3: Missing RPC Function ---
+            // Code PGRST202: Function not found
+            // Fallback to direct table inserts
             if (
                 error.code === 'PGRST202' || 
                 error.message?.includes('function not found') || 
@@ -165,6 +189,14 @@ class SyncService {
         });
         
         if (invError) {
+             // Catch FK error here too for direct insert
+             if (invError.code === '23503') {
+                 console.warn("Direct Insert FK Error. Retrying customer sync...");
+                 const localCustomer = await db.customers.get(invoice.customer_id);
+                 if (localCustomer && await this.pushCustomerUpdate(localCustomer)) {
+                     return this.pushInvoiceDirect(invoice);
+                 }
+             }
              console.error('Direct Sync Invoice Error', invError);
              return false;
         }
@@ -208,8 +240,11 @@ class SyncService {
                 updated_at: new Date().toISOString()
             });
 
-        if (error) console.error("Customer Sync Error", error);
-        return !error;
+        if (error) {
+            console.error("Customer Sync Error", error);
+            return false;
+        }
+        return true;
     }
 }
 
