@@ -11,6 +11,18 @@ import { QueueItem } from '../types';
 class SyncService {
     private isSyncing = false;
 
+    // Helper to get current company ID from session
+    private getCompanyId(): string | null {
+        const userStr = localStorage.getItem('user');
+        if (!userStr) return null;
+        try {
+            const user = JSON.parse(userStr);
+            return user.company_id || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
     async sync() {
         if (this.isSyncing || !isSupabaseConfigured() || !navigator.onLine) return;
         
@@ -21,12 +33,8 @@ class SyncService {
             return;
         }
 
-        // Check if local user has company_id before trying to sync to avoid RPC errors
-        const userStr = localStorage.getItem('user');
-        if (!userStr) return;
-        const user = JSON.parse(userStr);
-        if (!user.company_id) {
-            // User is logged in but profile/company setup isn't complete on local device yet
+        // Check if local user has company_id
+        if (!this.getCompanyId()) {
             return;
         }
 
@@ -118,7 +126,6 @@ class SyncService {
             console.error('RPC Error:', error);
 
             // --- HANDLING 1: Foreign Key Violation (Missing Customer) ---
-            // Code 23503: insert or update on table "invoices" violates foreign key constraint
             if (error.code === '23503') {
                 console.warn(`Sync failed due to missing dependency (Customer: ${invoice.customer_id}). Attempting JIT sync...`);
                 
@@ -131,18 +138,16 @@ class SyncService {
                     
                     if (custSuccess) {
                         console.log("JIT Customer Sync Successful. Retrying Invoice Sync...");
-                        // 3. Recursive Retry (One level deep effectively)
+                        // 3. Recursive Retry
                         return this.pushInvoice(invoice);
                     }
                 } else {
                     console.error("Critical: Referenced customer not found in local DB.");
                 }
-                return false; // Fail this attempt so it retries later
+                return false; 
             }
             
             // --- HANDLING 2: Idempotency (Duplicates) ---
-            // Code 23505: Duplicate Key
-            // We treat this as success to unblock queue
             if (
                 error.code === '23505' || 
                 error.message?.toLowerCase().includes('unique') || 
@@ -153,8 +158,6 @@ class SyncService {
             }
 
             // --- HANDLING 3: Missing RPC Function ---
-            // Code PGRST202: Function not found
-            // Fallback to direct table inserts
             if (
                 error.code === 'PGRST202' || 
                 error.message?.includes('function not found') || 
@@ -173,10 +176,13 @@ class SyncService {
     // Fallback method for direct table insertion
     private async pushInvoiceDirect(invoice: any): Promise<boolean> {
         if (!supabase) return false;
+        const companyId = this.getCompanyId();
+        if (!companyId) return false;
         
         // 1. Upsert Invoice
         const { error: invError } = await supabase.from('invoices').upsert({
             id: invoice.id,
+            company_id: companyId, // INJECTED
             invoice_number: invoice.invoice_number,
             customer_id: invoice.customer_id,
             date: invoice.date,
@@ -202,10 +208,11 @@ class SyncService {
         }
 
         // 2. Upsert Items
-        // First clean up existing items for this invoice to prevent duplicates/orphans on update
         await supabase.from('invoice_items').delete().eq('invoice_id', invoice.id);
         
         const itemsPayload = invoice.items.map((item: any) => ({
+            id: crypto.randomUUID(), // Generate ID for item
+            company_id: companyId, // INJECTED
             invoice_id: invoice.id,
             product_id: item.product.id,
             batch_id: item.batch.id,
@@ -228,12 +235,18 @@ class SyncService {
 
     private async pushCustomerUpdate(customer: any): Promise<boolean> {
         if (!supabase) return false;
+        const companyId = this.getCompanyId();
         
-        // This relies on RLS policies allowing update to own company customers
+        if (!companyId) {
+            console.error("Cannot sync customer: Missing company_id in local session.");
+            return false;
+        }
+        
         const { error } = await supabase
             .from('customers')
             .upsert({
                 id: customer.id,
+                company_id: companyId, // INJECTED
                 name: customer.name,
                 phone: customer.phone,
                 current_balance: customer.current_balance,
