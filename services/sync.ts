@@ -116,10 +116,78 @@ class SyncService {
 
         if (error) {
             console.error('RPC Error:', error);
-            // Handle "Duplicate key" as success to avoid loops
-            if (error.message.includes('unique constraint') || error.code === '23505') {
+            
+            // Robust Idempotency Check:
+            // Handle "Duplicate key", "Unique constraint", or 409 Conflict as success
+            if (
+                error.code === '23505' || 
+                error.message?.toLowerCase().includes('unique') || 
+                error.message?.toLowerCase().includes('duplicate') ||
+                (error as any).status === 409
+            ) {
+                console.warn(`Sync for invoice ${invoice.invoice_number} treated as success (Duplicate/Idempotent).`);
                 return true; 
             }
+
+            // Fallback Strategy:
+            // If the RPC function is missing (404/PGRST202), try direct table insertion
+            if (
+                error.code === 'PGRST202' || 
+                error.message?.includes('function not found') || 
+                (error as any).status === 404
+            ) {
+                console.warn('Backend RPC missing. Attempting direct table insert fallback...');
+                return this.pushInvoiceDirect(invoice);
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    // Fallback method for direct table insertion
+    private async pushInvoiceDirect(invoice: any): Promise<boolean> {
+        if (!supabase) return false;
+        
+        // 1. Upsert Invoice
+        const { error: invError } = await supabase.from('invoices').upsert({
+            id: invoice.id,
+            invoice_number: invoice.invoice_number,
+            customer_id: invoice.customer_id,
+            date: invoice.date,
+            total_before_discount: invoice.total_before_discount,
+            total_discount: invoice.total_discount,
+            net_total: invoice.net_total,
+            payment_status: invoice.payment_status,
+            type: invoice.type,
+            updated_at: new Date().toISOString()
+        });
+        
+        if (invError) {
+             console.error('Direct Sync Invoice Error', invError);
+             return false;
+        }
+
+        // 2. Upsert Items
+        // First clean up existing items for this invoice to prevent duplicates/orphans on update
+        await supabase.from('invoice_items').delete().eq('invoice_id', invoice.id);
+        
+        const itemsPayload = invoice.items.map((item: any) => ({
+            invoice_id: invoice.id,
+            product_id: item.product.id,
+            batch_id: item.batch.id,
+            quantity: item.quantity,
+            bonus_quantity: item.bonus_quantity,
+            unit_price: item.unit_price || item.batch.selling_price,
+            discount_percentage: item.discount_percentage,
+            line_total: (item.quantity * (item.unit_price || item.batch.selling_price)) * (1 - (item.discount_percentage/100))
+        }));
+
+        const { error: itemsError } = await supabase.from('invoice_items').insert(itemsPayload);
+        
+        if (itemsError) {
+            console.error('Direct Sync Items Error', itemsError);
             return false;
         }
 

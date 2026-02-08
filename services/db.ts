@@ -127,6 +127,10 @@ class MizanDatabase extends Dexie {
             retries: 0
         });
     }
+    
+    async clearQueue(): Promise<void> {
+        await this.queue.clear();
+    }
 
     async getSettings(): Promise<SystemSettings> {
         const conf = await this.settings.get('config');

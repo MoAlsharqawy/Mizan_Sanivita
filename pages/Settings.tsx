@@ -119,6 +119,13 @@ export default function Settings() {
           reader.readAsText(file);
       }
   };
+  
+  const handleClearQueue = async () => {
+      if (confirm("Clear pending sync queue? Use this only if sync is stuck.")) {
+          await db.clearQueue();
+          alert("Queue cleared.");
+      }
+  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -608,7 +615,7 @@ export default function Settings() {
                     <p className="text-sm text-gray-500">Backup your data regularly to prevent loss. The system stores data in your browser's local storage.</p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="bg-blue-50 p-6 rounded-xl border border-blue-100 flex flex-col items-center text-center">
                         <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-4">
                             <Download className="w-8 h-8 text-blue-600" />
@@ -633,6 +640,20 @@ export default function Settings() {
                             Select File
                             <input type="file" className="hidden" accept=".json" onChange={handleRestore} />
                         </label>
+                    </div>
+
+                    <div className="bg-red-50 p-6 rounded-xl border border-red-100 flex flex-col items-center text-center">
+                        <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
+                            <RefreshCw className="w-8 h-8 text-red-600" />
+                        </div>
+                        <h4 className="font-bold text-gray-800 mb-2">Clear Sync Queue</h4>
+                        <p className="text-xs text-gray-500 mb-6">Force clear pending sync items if stuck (Error 409/Duplicate).</p>
+                        <button 
+                            onClick={handleClearQueue}
+                            className="bg-red-600 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-red-700 shadow-lg shadow-red-500/20 w-full"
+                        >
+                            Clear Queue
+                        </button>
                     </div>
                 </div>
             </div>
