@@ -2,7 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/db';
 import { authService, PERMISSIONS } from '../services/auth';
-import { Save, RefreshCw, Building2, FileText, Settings as SettingsIcon, Users, Plus, Edit2, Trash2, X, Shield, Key, CheckSquare, Printer, Upload, Image as ImageIcon, Database, Download } from 'lucide-react';
+import { supabase } from '../services/supabase';
+import { Save, RefreshCw, Building2, FileText, Settings as SettingsIcon, Users, Plus, Edit2, Trash2, X, Shield, Key, CheckSquare, Printer, Upload, Image as ImageIcon, Database, Download, Wrench } from 'lucide-react';
 import { t } from '../utils/t';
 
 export default function Settings() {
@@ -124,6 +125,22 @@ export default function Settings() {
       if (confirm("Clear pending sync queue? Use this only if sync is stuck.")) {
           await db.clearQueue();
           alert("Queue cleared.");
+      }
+  };
+
+  const handleRepairAccount = async () => {
+      if (confirm("This attempts to fix permission errors (403) by recreating your server profile. Continue?")) {
+          if (supabase) {
+              const { data } = await supabase.auth.getUser();
+              if (data.user && data.user.email) {
+                  await authService.ensureAccountSetup(data.user.id, data.user.email);
+                  alert("Repair command sent. Please check if sync works now.");
+              } else {
+                  alert("Could not get current user. Are you logged in?");
+              }
+          } else {
+              alert("Supabase not configured.");
+          }
       }
   };
 
@@ -615,7 +632,7 @@ export default function Settings() {
                     <p className="text-sm text-gray-500">Backup your data regularly to prevent loss. The system stores data in your browser's local storage.</p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                     <div className="bg-blue-50 p-6 rounded-xl border border-blue-100 flex flex-col items-center text-center">
                         <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-4">
                             <Download className="w-8 h-8 text-blue-600" />
@@ -640,6 +657,20 @@ export default function Settings() {
                             Select File
                             <input type="file" className="hidden" accept=".json" onChange={handleRestore} />
                         </label>
+                    </div>
+
+                    <div className="bg-purple-50 p-6 rounded-xl border border-purple-100 flex flex-col items-center text-center">
+                        <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mb-4">
+                            <Wrench className="w-8 h-8 text-purple-600" />
+                        </div>
+                        <h4 className="font-bold text-gray-800 mb-2">Repair Cloud Account</h4>
+                        <p className="text-xs text-gray-500 mb-6">Fixes "Permission Denied" errors by regenerating your profile on the server.</p>
+                        <button 
+                            onClick={handleRepairAccount}
+                            className="bg-purple-600 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-purple-700 shadow-lg shadow-purple-500/20 w-full"
+                        >
+                            Repair Account
+                        </button>
                     </div>
 
                     <div className="bg-red-50 p-6 rounded-xl border border-red-100 flex flex-col items-center text-center">

@@ -19,7 +19,7 @@ export const PERMISSIONS = [
 const ALL_PERMISSIONS_IDS = PERMISSIONS.map(p => p.id);
 
 export const authService = {
-  // Login with REAL Supabase Auth***
+  // Login with REAL Supabase Auth
   login: async (email: string, password: string): Promise<User> => {
     if (!supabase) throw new Error("Supabase not configured");
 
@@ -30,6 +30,13 @@ export const authService = {
 
     if (error) throw error;
     if (!data.user) throw new Error("No user returned");
+
+    // Attempt to ensure profile exists to prevent RLS errors later
+    try {
+        await authService.ensureAccountSetup(data.user.id, email);
+    } catch (e) {
+        console.warn("Auto-profile setup failed", e);
+    }
 
     // We use the User ID as the Company ID for single-tenant simplified mode
     const userObj: User = {
@@ -54,7 +61,11 @@ export const authService = {
       });
 
       if (error) throw error;
-      // Login will handle the storage setup
+      
+      if (data.user) {
+          // Create profile immediately
+          await authService.ensureAccountSetup(data.user.id, email);
+      }
   },
 
   logout: async () => {
@@ -84,10 +95,21 @@ export const authService = {
       localStorage.setItem('user', JSON.stringify(user));
   },
 
-  // Compatibility stub
+  // Ensures a profile row exists for the user. Fixes "permission denied for table profiles"
   ensureAccountSetup: async (userId: string, email: string) => {
-      // In this simplified mode, we assume the auth user IS the account owner.
-      return;
+      if (!supabase) return;
+      console.log("Ensuring account profile exists...");
+      
+      // Try 'profiles' - standard Supabase table for users
+      const { error } = await supabase.from('profiles').upsert({
+          id: userId,
+          full_name: email.split('@')[0],
+          updated_at: new Date().toISOString()
+      });
+      
+      if (error) {
+          console.warn("Profile upsert failed (profiles table might not exist or schema differs):", error.message);
+      }
   },
 
   transformUser: (sbUser: any): User => {

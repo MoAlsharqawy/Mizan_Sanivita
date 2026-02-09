@@ -4,7 +4,7 @@ import { supabase, isSupabaseConfigured } from './supabase';
 import { QueueItem } from '../types';
 import { authService } from './auth';
 
-/****
+/**
  * The Sync Engine
  * Handles pushing local offline changes to the Supabase server.
  */
@@ -91,7 +91,7 @@ class SyncService {
     }
 
     // Direct Table Insertion Strategy (Bypassing complex RPCs for single-tenant reliability)
-    private async pushInvoiceDirect(invoice: any, companyId: string): Promise<boolean> {
+    private async pushInvoiceDirect(invoice: any, companyId: string, isRetry = false): Promise<boolean> {
         if (!supabase) return false;
         
         // 1. Upsert Invoice
@@ -110,13 +110,24 @@ class SyncService {
         });
         
         if (invError) {
+             // Handle Missing Profile / Permission Error (RLS)
+             if ((invError.code === '42501' || invError.message.includes('profiles')) && !isRetry) {
+                 console.warn("Permission Error (RLS). Attempting to repair account profile...");
+                 const { data: { user } } = await supabase.auth.getUser();
+                 if (user && user.email) {
+                     await authService.ensureAccountSetup(user.id, user.email);
+                     // Retry once
+                     return this.pushInvoiceDirect(invoice, companyId, true);
+                 }
+             }
+
              // Catch FK error (Missing Customer)
              if (invError.code === '23503') {
                  console.warn("Direct Insert FK Error. Retrying customer sync...");
                  const localCustomer = await db.customers.get(invoice.customer_id);
                  if (localCustomer && await this.pushCustomerUpdate(localCustomer, companyId)) {
                      // Retry self
-                     return this.pushInvoiceDirect(invoice, companyId);
+                     return this.pushInvoiceDirect(invoice, companyId, true);
                  }
              }
              console.error('Direct Sync Invoice Error', invError);
@@ -165,6 +176,11 @@ class SyncService {
 
         if (error) {
             console.error("Customer Sync Error", error);
+            // Auto repair profile if RLS fails here too
+            if (error.code === '42501') {
+                 const { data: { user } } = await supabase.auth.getUser();
+                 if (user && user.email) await authService.ensureAccountSetup(user.id, user.email);
+            }
             return false;
         }
         return true;
