@@ -101,37 +101,22 @@ export const authService = {
       // 2. No Profile? Create Company + Profile (Bootstrap)
       console.log("Bootstrapping new account...");
       
-      // A. Create Company
-      const { data: company, error: companyError } = await supabase
-          .from('companies')
-          .insert({ name: newCompanyName })
-          .select()
-          .single();
+      // USE RPC FUNCTION TO BYPASS RLS ISSUES DURING CREATION
+      const { data: rpcData, error: rpcError } = await supabase.rpc('register_new_company', {
+          p_company_name: newCompanyName,
+          p_full_name: email.split('@')[0]
+      });
 
-      if (companyError) {
-          console.error("Company Creation Error:", companyError);
-          if (companyError.code === '42501' || companyError.message.includes('violates row-level security')) {
-              throw new Error("Database Permission Error: Please run the SQL setup script in Supabase Dashboard to allow company creation.");
+      if (rpcError) {
+          console.error("Account Creation Error:", rpcError);
+          // Fallback: If function doesn't exist, throw specific error asking to run SQL
+          if (rpcError.message.includes('function not found')) {
+             throw new Error("Setup Error: Please run the SQL setup script (register_new_company function) in Supabase Dashboard.");
           }
-          throw new Error("Failed to create company: " + companyError.message);
+          throw new Error("Failed to set up account: " + rpcError.message);
       }
 
-      if (!company) throw new Error("Failed to create company data.");
-
-      // B. Create Profile linked to Company
-      const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-              id: userId,
-              company_id: company.id,
-              role: 'ADMIN',
-              full_name: email.split('@')[0]
-          });
-
-      if (profileError) {
-          console.error("Profile Creation Error:", profileError);
-          throw new Error("Failed to create profile: " + profileError.message);
-      }
+      const companyId = (rpcData as any)?.company_id;
 
       // C. Save to Local Storage
       const userObj = {
@@ -139,7 +124,7 @@ export const authService = {
           username: email,
           name: email.split('@')[0],
           role: 'ADMIN',
-          company_id: company.id,
+          company_id: companyId,
           permissions: ALL_PERMISSIONS_IDS
       };
       localStorage.setItem('user', JSON.stringify(userObj));
