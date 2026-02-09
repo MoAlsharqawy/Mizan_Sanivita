@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Package, Users, FileText, Settings, CreditCard, Truck, Briefcase, Warehouse, Menu, X, BarChart3, LogOut, ChevronDown, ChevronRight, TrendingUp, Phone, Plus, Award, ShieldAlert, Cloud, CloudOff, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, Users, FileText, Settings, CreditCard, Truck, Briefcase, Warehouse, Menu, X, BarChart3, LogOut, ChevronDown, ChevronRight, TrendingUp, Phone, Plus, Award, ShieldAlert, Cloud, CloudOff, RefreshCw, AlertTriangle, Copy, Check, ArrowRight } from 'lucide-react';
 import { t, isRTL } from '../utils/t';
 import { authService } from '../services/auth';
 import { syncService } from '../services/sync';
@@ -18,10 +18,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [expandedMenus, setExpandedMenus] = useState<string[]>(['/reports']); 
   const [pendingCount, setPendingCount] = useState(0);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [showSqlFix, setShowSqlFix] = useState(false);
+  const [copied, setCopied] = useState(false);
   
   const rtl = isRTL();
   const dir = rtl ? 'rtl' : 'ltr';
   const user = authService.getCurrentUser();
+  const isEmergencyMode = user?.company_id === 'emergency_access';
 
   // Monitor Sync Queue & Online Status
   useEffect(() => {
@@ -46,7 +49,23 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   }, []);
 
   const handleManualSync = () => {
-      syncService.sync();
+      if (!isEmergencyMode) {
+          syncService.sync();
+      }
+  };
+
+  const handleCopySql = () => {
+      const sql = `
+CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
+CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
+CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
+
+CREATE POLICY "Allow users to view their companies" ON public.companies FOR SELECT USING (auth.uid() = created_by OR id IN (SELECT company_id FROM public.profiles WHERE id = auth.uid()));
+CREATE POLICY "Users can create companies" ON public.companies FOR INSERT WITH CHECK (auth.uid() = created_by);
+      `;
+      navigator.clipboard.writeText(sql);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
   };
 
   const allNavs = [
@@ -238,6 +257,23 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </aside>
 
       <main className="flex-1 flex flex-col overflow-hidden relative w-full bg-slate-50">
+        
+        {/* Emergency Mode Banner */}
+        {isEmergencyMode && (
+            <div className="bg-orange-500 text-white px-4 py-2 flex justify-between items-center text-sm shadow-md z-20">
+                <div className="flex items-center gap-2 font-bold">
+                    <AlertTriangle className="w-5 h-5" />
+                    <span>Access Limited: Database permissions required.</span>
+                </div>
+                <button 
+                    onClick={() => setShowSqlFix(true)} 
+                    className="bg-white text-orange-600 px-3 py-1 rounded-full text-xs font-bold hover:bg-orange-50 transition-colors"
+                >
+                    Fix Now
+                </button>
+            </div>
+        )}
+
         <header className="bg-white/80 backdrop-blur-md shadow-sm border-b border-slate-200 h-16 flex items-center justify-center sm:justify-between px-4 sm:px-8 z-10 sticky top-0 shrink-0">
           <div className="flex items-center gap-4 w-full sm:w-auto">
             <button 
@@ -254,17 +290,26 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <div className="flex items-center space-x-4 rtl:space-x-reverse hidden sm:flex">
              {/* Sync Status Indicator */}
              <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-full border border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors" onClick={handleManualSync}>
-                 {isOnline ? <Cloud className="w-4 h-4 text-emerald-500" /> : <CloudOff className="w-4 h-4 text-slate-400" />}
-                 <span className="text-xs font-bold text-slate-600">
-                     {pendingCount > 0 ? (
-                         <span className="flex items-center gap-1 text-orange-600">
-                             <RefreshCw className="w-3 h-3 animate-spin" />
-                             Syncing ({pendingCount})
-                         </span>
-                     ) : (
-                         isOnline ? 'Synced' : 'Offline'
-                     )}
-                 </span>
+                 {isEmergencyMode ? (
+                     <>
+                        <CloudOff className="w-4 h-4 text-orange-500" />
+                        <span className="text-xs font-bold text-orange-600">Sync Paused</span>
+                     </>
+                 ) : (
+                     <>
+                        {isOnline ? <Cloud className="w-4 h-4 text-emerald-500" /> : <CloudOff className="w-4 h-4 text-slate-400" />}
+                        <span className="text-xs font-bold text-slate-600">
+                            {pendingCount > 0 ? (
+                                <span className="flex items-center gap-1 text-orange-600">
+                                    <RefreshCw className="w-3 h-3 animate-spin" />
+                                    Syncing ({pendingCount})
+                                </span>
+                            ) : (
+                                isOnline ? 'Synced' : 'Offline'
+                            )}
+                        </span>
+                     </>
+                 )}
              </div>
 
              <div className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-medium border border-blue-100">
@@ -291,6 +336,64 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 </div>
             </div>
         </footer>
+
+        {/* SQL FIX MODAL */}
+        {showSqlFix && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col">
+                    <div className="p-5 border-b bg-orange-50 flex justify-between items-center">
+                        <h3 className="font-bold text-lg text-orange-800 flex items-center gap-2">
+                            <AlertTriangle className="w-5 h-5" /> Database Repair Needed
+                        </h3>
+                        <button onClick={() => setShowSqlFix(false)} className="text-orange-400 hover:text-orange-600">
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                    <div className="p-6">
+                        <p className="text-gray-600 text-sm mb-4">
+                            The application cannot read your profile because the database "Row Level Security" policies are missing. 
+                            Please run this SQL code in your Supabase Dashboard to fix it permanently.
+                        </p>
+                        
+                        <div className="relative bg-slate-900 rounded-lg p-4 font-mono text-xs text-green-400 overflow-x-auto border border-slate-700">
+                            <pre>{`
+-- 1. FIX PROFILES TABLE
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
+CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
+
+-- 2. FIX COMPANIES TABLE
+ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow users to view their companies" ON public.companies;
+CREATE POLICY "Allow users to view their companies" ON public.companies FOR SELECT USING (auth.uid() = created_by OR id IN (SELECT company_id FROM public.profiles WHERE id = auth.uid()));
+                            `}</pre>
+                            <button 
+                                onClick={handleCopySql}
+                                className="absolute top-2 right-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors flex items-center gap-2"
+                            >
+                                {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                                {copied ? 'Copied' : 'Copy SQL'}
+                            </button>
+                        </div>
+
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button onClick={() => setShowSqlFix(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Dismiss</button>
+                            <a 
+                                href="https://supabase.com/dashboard" 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="px-6 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 flex items-center gap-2"
+                            >
+                                Open Supabase Dashboard <ArrowRight className="w-4 h-4" />
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
+
       </main>
     </div>
   );

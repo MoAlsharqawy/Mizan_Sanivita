@@ -26,15 +26,17 @@ class SyncService {
     async sync() {
         if (this.isSyncing || !isSupabaseConfigured() || !navigator.onLine) return;
         
+        const companyId = this.getCompanyId();
+        
+        // STOP SYNC IF WE ARE IN EMERGENCY MODE (NO DB PERMISSION)
+        if (!companyId || companyId === 'emergency_access') {
+            return;
+        }
+
         // CRITICAL CHECK: Do we have a valid session?
         if (!supabase) return;
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) {
-            return;
-        }
-
-        // Check if local user has company_id
-        if (!this.getCompanyId()) {
             return;
         }
 
@@ -177,7 +179,7 @@ class SyncService {
     private async pushInvoiceDirect(invoice: any): Promise<boolean> {
         if (!supabase) return false;
         const companyId = this.getCompanyId();
-        if (!companyId) return false;
+        if (!companyId || companyId === 'emergency_access') return false;
         
         // 1. Upsert Invoice
         const { error: invError } = await supabase.from('invoices').upsert({
@@ -237,8 +239,7 @@ class SyncService {
         if (!supabase) return false;
         const companyId = this.getCompanyId();
         
-        if (!companyId) {
-            console.error("Cannot sync customer: Missing company_id in local session.");
+        if (!companyId || companyId === 'emergency_access') {
             return false;
         }
         
