@@ -19,51 +19,52 @@ export default function Settings() {
       permissions: [] as string[]
   });
 
-  // --- THE CORRECTED SQL SCRIPT ---
+  // --- COMPLETE FRESH START SQL ---
   const SQL_SCRIPT = `
--- 1. CLEANUP (Prevent duplication errors)
-drop policy if exists "Users can manage their own profiles" on profiles;
-drop policy if exists "Users can manage their own customers" on customers;
-drop policy if exists "Users can manage their own invoices" on invoices;
-drop policy if exists "Users can manage their own invoice items" on invoice_items;
+-- 1. NUKE EVERYTHING (DROP TABLES TO START FRESH)
+-- We use CASCADE to remove dependent policies and keys automatically
+DROP TABLE IF EXISTS public.invoice_items CASCADE;
+DROP TABLE IF EXISTS public.invoices CASCADE;
+DROP TABLE IF EXISTS public.customers CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
 
--- 2. CREATE TABLES (Compatible with Frontend)
+-- 2. CREATE TABLES (Correct Order & Types)
 
--- Profiles (Users)
-create table if not exists public.profiles (
+-- Profiles: Linked to Supabase Auth
+create table public.profiles (
   id uuid references auth.users on delete cascade not null primary key,
   full_name text,
   updated_at timestamp with time zone
 );
 
--- Customers
-create table if not exists public.customers (
-  id uuid primary key, -- Matches Sync Payload
-  company_id uuid references auth.users(id) not null, -- Critical for Security
+-- Customers: Clients data
+create table public.customers (
+  id uuid primary key,
+  company_id uuid references auth.users(id) not null,
   name text,
   phone text,
   current_balance numeric default 0,
   updated_at timestamp with time zone
 );
 
--- Invoices
-create table if not exists public.invoices (
+-- Invoices: Sales headers
+create table public.invoices (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
   invoice_number text,
-  customer_id uuid references public.customers(id), -- Safe FK
+  customer_id uuid references public.customers(id),
   date timestamp with time zone,
   total_before_discount numeric,
   total_discount numeric,
   net_total numeric,
   payment_status text,
-  type text,
+  type text, -- 'SALE' or 'RETURN'
   updated_at timestamp with time zone
 );
 
--- Invoice Items
--- Note: product_id & batch_id are TEXT to allow local IDs like 'P1'
-create table if not exists public.invoice_items (
+-- Invoice Items: Line items
+-- Note: product_id is TEXT to support local IDs like 'P1', 'P2'
+create table public.invoice_items (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
   invoice_id uuid references public.invoices(id) on delete cascade,
@@ -74,35 +75,39 @@ create table if not exists public.invoice_items (
   line_total numeric
 );
 
--- 3. ENABLE SECURITY (RLS)
+-- 3. ENABLE ROW LEVEL SECURITY (RLS)
+-- This activates the firewall for each table
 alter table public.profiles enable row level security;
 alter table public.customers enable row level security;
 alter table public.invoices enable row level security;
 alter table public.invoice_items enable row level security;
 
--- 4. CREATE ROBUST POLICIES
--- Allow users to fully manage rows where company_id matches their Auth ID
+-- 4. CREATE POLICIES (Access Control)
 
--- Profiles
-create policy "Users can manage their own profiles" 
+-- Profiles Policy
+create policy "Users can manage own profile" 
 on profiles for all using ( auth.uid() = id );
 
--- Customers
-create policy "Users can manage their own customers" 
+-- Customers Policy
+create policy "Users can manage own customers" 
 on customers for all using ( auth.uid() = company_id );
 
--- Invoices
-create policy "Users can manage their own invoices" 
+-- Invoices Policy
+create policy "Users can manage own invoices" 
 on invoices for all using ( auth.uid() = company_id );
 
--- Invoice Items
-create policy "Users can manage their own invoice items" 
+-- Invoice Items Policy
+create policy "Users can manage own invoice items" 
 on invoice_items for all using ( auth.uid() = company_id );
 
--- 5. STORAGE BUCKET (Optional, preventing errors if missing)
+-- 5. STORAGE BUCKET (For Logos)
 insert into storage.buckets (id, name, public) 
 values ('logos', 'logos', true) 
 on conflict (id) do nothing;
+
+-- Storage Policies (Drop first to avoid errors on re-run)
+drop policy if exists "Logos are public" on storage.objects;
+drop policy if exists "Users upload logos" on storage.objects;
 
 create policy "Logos are public" on storage.objects for select using ( bucket_id = 'logos' );
 create policy "Users upload logos" on storage.objects for insert with check ( bucket_id = 'logos' AND auth.uid() = owner );
@@ -265,10 +270,10 @@ create policy "Users upload logos" on storage.objects for insert with check ( bu
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
                     <Shield className="w-6 h-6 text-amber-600 shrink-0 mt-1" />
                     <div>
-                        <h4 className="font-bold text-amber-800">Supabase Permission Fix</h4>
+                        <h4 className="font-bold text-amber-800">Fresh Start SQL Script</h4>
                         <p className="text-sm text-amber-700 mt-1">
-                            If the test above fails or you see "Sync Failed", your database tables are likely missing.
-                            Copy the code below and run it in the <b>Supabase SQL Editor</b>.
+                            This script will <b>DROP ALL EXISTING TABLES</b> and recreate them correctly.
+                            Use this only if you want a completely clean installation.
                         </p>
                     </div>
                 </div>
