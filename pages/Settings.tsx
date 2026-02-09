@@ -19,25 +19,56 @@ export default function Settings() {
       permissions: [] as string[]
   });
 
-  // --- COMPLETE FRESH START SQL ---
+  // --- COMPLETE FRESH START SQL (UPDATED WITH ALL TABLES) ---
   const SQL_SCRIPT = `
--- 1. NUKE EVERYTHING (DROP TABLES TO START FRESH)
--- We use CASCADE to remove dependent policies and keys automatically
+-- ⚠️ تحذير: سيتم حذف جميع البيانات الحالية وإعادة البناء
+-- 1. تنظيف (حذف الجداول القديمة)
 DROP TABLE IF EXISTS public.invoice_items CASCADE;
 DROP TABLE IF EXISTS public.invoices CASCADE;
 DROP TABLE IF EXISTS public.customers CASCADE;
+DROP TABLE IF EXISTS public.products CASCADE;
+DROP TABLE IF EXISTS public.settings CASCADE;
 DROP TABLE IF EXISTS public.profiles CASCADE;
 
--- 2. CREATE TABLES (Correct Order & Types)
+-- 2. إنشاء الجداول (Create Tables)
 
--- Profiles: Linked to Supabase Auth
+-- أ) المستخدمين (Profiles)
+-- ملاحظة: بيانات الدخول (الإيميل والباسورد) مخزنة في جدول النظام auth.users
+-- هذا الجدول (profiles) مخصص لبيانات الشركة الإضافية
 create table public.profiles (
   id uuid references auth.users on delete cascade not null primary key,
   full_name text,
+  subscription_tier text default 'free',
   updated_at timestamp with time zone
 );
 
--- Customers: Clients data
+-- ب) الإعدادات (Settings)
+create table public.settings (
+  company_id uuid references auth.users(id) not null primary key,
+  company_name text,
+  company_address text,
+  company_phone text,
+  tax_number text,
+  currency text default '$',
+  logo_url text,
+  updated_at timestamp with time zone
+);
+
+-- ج) المنتجات (Products)
+-- نستخدم (id, company_id) كمفتاح مركب لأن المعرفات نصية ومحلية
+create table public.products (
+  id text not null, -- P1, P2 (Local ID)
+  company_id uuid references auth.users(id) not null,
+  code text,
+  name text,
+  purchase_price numeric,
+  selling_price numeric,
+  current_stock numeric default 0,
+  updated_at timestamp with time zone,
+  primary key (id, company_id)
+);
+
+-- د) العملاء (Customers)
 create table public.customers (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
@@ -47,7 +78,7 @@ create table public.customers (
   updated_at timestamp with time zone
 );
 
--- Invoices: Sales headers
+-- هـ) الفواتير (Invoices)
 create table public.invoices (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
@@ -58,59 +89,61 @@ create table public.invoices (
   total_discount numeric,
   net_total numeric,
   payment_status text,
-  type text, -- 'SALE' or 'RETURN'
+  type text,
   updated_at timestamp with time zone
 );
 
--- Invoice Items: Line items
--- Note: product_id is TEXT to support local IDs like 'P1', 'P2'
+-- و) عناصر الفاتورة (Invoice Items)
 create table public.invoice_items (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
   invoice_id uuid references public.invoices(id) on delete cascade,
-  product_id text, 
+  product_id text, -- ربط غير مباشر مع products.id
   batch_id text,
   quantity numeric,
   unit_price numeric,
   line_total numeric
 );
 
--- 3. ENABLE ROW LEVEL SECURITY (RLS)
--- This activates the firewall for each table
+-- 3. تفعيل الحماية (Enable RLS)
 alter table public.profiles enable row level security;
+alter table public.settings enable row level security;
+alter table public.products enable row level security;
 alter table public.customers enable row level security;
 alter table public.invoices enable row level security;
 alter table public.invoice_items enable row level security;
 
--- 4. CREATE POLICIES (Access Control)
+-- 4. سياسات الأمان (Access Policies)
+-- السماح للمستخدم برؤية وتعديل بياناته فقط
 
--- Profiles Policy
-create policy "Users can manage own profile" 
-on profiles for all using ( auth.uid() = id );
+-- Profiles
+create policy "Users own profile" on profiles for all using ( auth.uid() = id );
 
--- Customers Policy
-create policy "Users can manage own customers" 
-on customers for all using ( auth.uid() = company_id );
+-- Settings
+create policy "Users own settings" on settings for all using ( auth.uid() = company_id );
 
--- Invoices Policy
-create policy "Users can manage own invoices" 
-on invoices for all using ( auth.uid() = company_id );
+-- Products
+create policy "Users own products" on products for all using ( auth.uid() = company_id );
 
--- Invoice Items Policy
-create policy "Users can manage own invoice items" 
-on invoice_items for all using ( auth.uid() = company_id );
+-- Customers
+create policy "Users own customers" on customers for all using ( auth.uid() = company_id );
 
--- 5. STORAGE BUCKET (For Logos)
+-- Invoices
+create policy "Users own invoices" on invoices for all using ( auth.uid() = company_id );
+
+-- Invoice Items
+create policy "Users own items" on invoice_items for all using ( auth.uid() = company_id );
+
+-- 5. التخزين (Storage)
 insert into storage.buckets (id, name, public) 
 values ('logos', 'logos', true) 
 on conflict (id) do nothing;
 
--- Storage Policies (Drop first to avoid errors on re-run)
-drop policy if exists "Logos are public" on storage.objects;
-drop policy if exists "Users upload logos" on storage.objects;
+drop policy if exists "Logos Public" on storage.objects;
+drop policy if exists "Logos Upload" on storage.objects;
 
-create policy "Logos are public" on storage.objects for select using ( bucket_id = 'logos' );
-create policy "Users upload logos" on storage.objects for insert with check ( bucket_id = 'logos' AND auth.uid() = owner );
+create policy "Logos Public" on storage.objects for select using ( bucket_id = 'logos' );
+create policy "Logos Upload" on storage.objects for insert with check ( bucket_id = 'logos' AND auth.uid() = owner );
   `;
 
   useEffect(() => {
@@ -272,8 +305,7 @@ create policy "Users upload logos" on storage.objects for insert with check ( bu
                     <div>
                         <h4 className="font-bold text-amber-800">Fresh Start SQL Script</h4>
                         <p className="text-sm text-amber-700 mt-1">
-                            This script will <b>DROP ALL EXISTING TABLES</b> and recreate them correctly.
-                            Use this only if you want a completely clean installation.
+                            This script will <b>DROP ALL EXISTING TABLES</b> and recreate them correctly with <b>Products, Settings, and Profiles</b> tables.
                         </p>
                     </div>
                 </div>
