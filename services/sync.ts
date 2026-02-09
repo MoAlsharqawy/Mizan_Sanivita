@@ -2,196 +2,124 @@
 import { db } from './db';
 import { supabase, isSupabaseConfigured } from './supabase';
 import { QueueItem } from '../types';
-import { authService } from './auth';
-
-/**
- * The Sync Engine
- * Handles pushing local offline changes to the Supabase server.
- */
 
 class SyncService {
     private isSyncing = false;
 
-    // Helper to get current company ID from AUTHENTICATED session
-    // In single-tenant mode, Company ID === User ID
-    private async getEffectiveCompanyId(): Promise<string | null> {
-        if (!supabase) return null;
-        const { data: { session } } = await supabase.auth.getSession();
-        return session?.user?.id || null;
-    }
-
     async sync() {
         if (this.isSyncing || !isSupabaseConfigured() || !navigator.onLine) return;
         
-        // 1. Check Authentication
-        const companyId = await this.getEffectiveCompanyId();
-        if (!companyId) {
-            console.log('Skipping sync: No active Supabase session.');
+        // 1. Authenticate
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user) {
+            console.log('Sync aborted: User not logged in');
             return;
         }
+        const userId = session.user.id; // This IS the company_id
 
         this.isSyncing = true;
-        console.log('🔄 Sync Started for ID:', companyId);
+        console.log(`🚀 Starting Sync for User: ${userId}`);
 
         try {
-            // 1. Get Pending Items
-            const pendingItems = await db.queue
-                .where('status')
-                .equals('PENDING')
-                .limit(50) 
-                .toArray();
-
-            if (pendingItems.length === 0) {
-                this.isSyncing = false;
-                return;
-            }
-
-            // 2. Process Items
+            const pendingItems = await db.queue.where('status').equals('PENDING').limit(20).toArray();
+            
             for (const item of pendingItems) {
-                await this.processItem(item, companyId);
+                await this.processItem(item, userId);
             }
 
         } catch (error) {
-            console.error('❌ Sync Error:', error);
+            console.error('❌ CRITICAL SYNC ERROR:', error);
         } finally {
             this.isSyncing = false;
         }
     }
 
-    private async processItem(item: QueueItem, companyId: string) {
+    private async processItem(item: QueueItem, userId: string) {
         try {
-            let success = false;
-
-            if (item.retries && item.retries > 5) {
-                await db.queue.update(item.id!, { status: 'FAILED', error_log: 'Max retries exceeded' });
-                return;
-            }
+            let error = null;
 
             if (item.action_type === 'CREATE_INVOICE') {
-                success = await this.pushInvoiceDirect(item.payload, companyId);
-            } else if (item.action_type === 'UPDATE_CUSTOMER') {
-                success = await this.pushCustomerUpdate(item.payload, companyId);
-            }
+                // Prepare Payload - Strip extraneous fields
+                const inv = item.payload;
+                
+                // 1. Sync Customer First (Ensure FK exists)
+                const customer = await db.customers.get(inv.customer_id);
+                if (customer) {
+                    await supabase.from('customers').upsert({
+                        id: customer.id,
+                        company_id: userId,
+                        name: customer.name,
+                        phone: customer.phone,
+                        current_balance: customer.current_balance,
+                        updated_at: new Date().toISOString()
+                    });
+                }
 
-            if (success) {
-                await db.queue.update(item.id!, { status: 'SYNCED' });
-            } else {
-                await db.queue.update(item.id!, { 
-                    retries: (item.retries || 0) + 1,
+                // 2. Sync Invoice
+                const { error: invErr } = await supabase.from('invoices').upsert({
+                    id: inv.id,
+                    company_id: userId,
+                    invoice_number: inv.invoice_number,
+                    customer_id: inv.customer_id,
+                    date: inv.date,
+                    total_before_discount: inv.total_before_discount,
+                    total_discount: inv.total_discount,
+                    net_total: inv.net_total,
+                    payment_status: inv.payment_status,
+                    type: inv.type,
+                    updated_at: new Date().toISOString()
                 });
+                if (invErr) error = invErr;
+
+                // 3. Sync Items
+                if (!error && inv.items && inv.items.length > 0) {
+                    const itemsPayload = inv.items.map((LineItem: any) => ({
+                        id: crypto.randomUUID(),
+                        company_id: userId,
+                        invoice_id: inv.id,
+                        product_id: LineItem.product.id,
+                        batch_id: LineItem.batch.id,
+                        quantity: LineItem.quantity,
+                        unit_price: LineItem.unit_price || 0,
+                        line_total: 0 // Calculate if needed, optional
+                    }));
+                    
+                    // We don't stop on item error, just log it, to prevent invoice loop
+                    const { error: itemsErr } = await supabase.from('invoice_items').insert(itemsPayload);
+                    if (itemsErr) console.warn("Items sync warning:", itemsErr);
+                }
+            } 
+            
+            else if (item.action_type === 'UPDATE_CUSTOMER') {
+                const { error: custErr } = await supabase.from('customers').upsert({
+                    id: item.payload.id,
+                    company_id: userId,
+                    name: item.payload.name,
+                    phone: item.payload.phone,
+                    current_balance: item.payload.current_balance,
+                    updated_at: new Date().toISOString()
+                });
+                error = custErr;
             }
 
-        } catch (err: any) {
-            console.error(`Failed to process queue item ${item.id}:`, err);
-            await db.queue.update(item.id!, { 
-                error_log: err.message || 'Unknown error',
-                retries: (item.retries || 0) + 1
-            });
-        }
-    }
-
-    // Direct Table Insertion Strategy (Bypassing complex RPCs for single-tenant reliability)
-    private async pushInvoiceDirect(invoice: any, companyId: string, isRetry = false): Promise<boolean> {
-        if (!supabase) return false;
-        
-        // 1. Upsert Invoice
-        const { error: invError } = await supabase.from('invoices').upsert({
-            id: invoice.id,
-            company_id: companyId, // FORCE INJECT REAL ID
-            invoice_number: invoice.invoice_number,
-            customer_id: invoice.customer_id,
-            date: invoice.date,
-            total_before_discount: invoice.total_before_discount,
-            total_discount: invoice.total_discount,
-            net_total: invoice.net_total,
-            payment_status: invoice.payment_status,
-            type: invoice.type,
-            updated_at: new Date().toISOString()
-        });
-        
-        if (invError) {
-             // Handle Missing Profile / Permission Error (RLS)
-             if ((invError.code === '42501' || invError.message.includes('profiles')) && !isRetry) {
-                 console.warn("Permission Error (RLS). Attempting to repair account profile...");
-                 const { data: { user } } = await supabase.auth.getUser();
-                 if (user && user.email) {
-                     await authService.ensureAccountSetup(user.id, user.email);
-                     // Retry once
-                     return this.pushInvoiceDirect(invoice, companyId, true);
-                 }
-             }
-
-             // Catch FK error (Missing Customer)
-             if (invError.code === '23503') {
-                 console.warn("Direct Insert FK Error. Retrying customer sync...");
-                 const localCustomer = await db.customers.get(invoice.customer_id);
-                 if (localCustomer && await this.pushCustomerUpdate(localCustomer, companyId)) {
-                     // Retry self
-                     return this.pushInvoiceDirect(invoice, companyId, true);
-                 }
-             }
-             console.error('Direct Sync Invoice Error', invError);
-             return false;
-        }
-
-        // 2. Upsert Items (Delete old items first to handle updates purely)
-        await supabase.from('invoice_items').delete().eq('invoice_id', invoice.id);
-        
-        const itemsPayload = invoice.items.map((item: any) => ({
-            id: crypto.randomUUID(),
-            company_id: companyId, // FORCE INJECT REAL ID
-            invoice_id: invoice.id,
-            product_id: item.product.id,
-            batch_id: item.batch.id,
-            quantity: item.quantity,
-            bonus_quantity: item.bonus_quantity,
-            unit_price: item.unit_price || item.batch.selling_price,
-            discount_percentage: item.discount_percentage,
-            line_total: (item.quantity * (item.unit_price || item.batch.selling_price)) * (1 - (item.discount_percentage/100))
-        }));
-
-        const { error: itemsError } = await supabase.from('invoice_items').insert(itemsPayload);
-        
-        if (itemsError) {
-            console.error('Direct Sync Items Error', itemsError);
-            return false;
-        }
-
-        return true;
-    }
-
-    private async pushCustomerUpdate(customer: any, companyId: string): Promise<boolean> {
-        if (!supabase) return false;
-        
-        const { error } = await supabase
-            .from('customers')
-            .upsert({
-                id: customer.id,
-                company_id: companyId, // FORCE INJECT REAL ID
-                name: customer.name,
-                phone: customer.phone,
-                current_balance: customer.current_balance,
-                updated_at: new Date().toISOString()
-            });
-
-        if (error) {
-            console.error("Customer Sync Error", error);
-            // Auto repair profile if RLS fails here too
-            if (error.code === '42501') {
-                 const { data: { user } } = await supabase.auth.getUser();
-                 if (user && user.email) await authService.ensureAccountSetup(user.id, user.email);
+            if (error) {
+                console.error(`Supabase Refused Item ${item.id}:`, error);
+                await db.queue.update(item.id!, { 
+                    status: 'FAILED', 
+                    error_log: JSON.stringify(error),
+                    retries: (item.retries || 0) + 1 
+                });
+            } else {
+                console.log(`✅ Item ${item.id} Synced!`);
+                await db.queue.update(item.id!, { status: 'SYNCED', error_log: undefined });
             }
-            return false;
+
+        } catch (e: any) {
+            console.error('Local Sync Logic Error:', e);
         }
-        return true;
     }
 }
 
 export const syncService = new SyncService();
-
-// Aggressive sync interval
-setInterval(() => {
-    syncService.sync();
-}, 10000);
-
+setInterval(() => syncService.sync(), 5000);
 window.addEventListener('online', () => syncService.sync());
