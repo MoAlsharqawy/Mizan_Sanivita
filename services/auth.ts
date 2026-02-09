@@ -82,6 +82,7 @@ export const authService = {
       if (!supabase) return;
 
       // 1. Check Profile - Use maybeSingle() to avoid 406 error on empty result
+      // We ignore errors here initially to allow the RPC recovery flow to handle inconsistencies
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
 
       if (profile) {
@@ -108,6 +109,29 @@ export const authService = {
       });
 
       if (rpcError) {
+          // HANDLE CONFLICT: If user already exists (code 23505), try to read profile again aggressively.
+          if (rpcError.code === '23505' || rpcError.message?.includes('duplicate key')) {
+              console.warn("Account already exists. Retrying profile fetch...");
+              
+              const { data: retryProfile, error: retryError } = await supabase.from('profiles').select('*').eq('id', userId).single();
+              
+              if (retryProfile) {
+                  const userObj = {
+                      id: userId,
+                      username: email,
+                      name: retryProfile.full_name || email.split('@')[0],
+                      role: retryProfile.role || 'USER',
+                      company_id: retryProfile.company_id,
+                      permissions: ALL_PERMISSIONS_IDS 
+                  };
+                  localStorage.setItem('user', JSON.stringify(userObj));
+                  return;
+              } else {
+                  console.error("Profile Fetch Error after Conflict:", retryError);
+                  throw new Error("Account exists but cannot be accessed. Please check database permissions (RLS).");
+              }
+          }
+
           console.error("Account Creation Error:", rpcError);
           // Fallback: If function doesn't exist, throw specific error asking to run SQL
           if (rpcError.message.includes('function not found')) {
