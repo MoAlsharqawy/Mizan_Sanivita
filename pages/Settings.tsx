@@ -3,12 +3,13 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../services/db';
 import { authService, PERMISSIONS } from '../services/auth';
 import { supabase } from '../services/supabase';
-import { Save, RefreshCw, Building2, FileText, Settings as SettingsIcon, Users, Plus, Edit2, Trash2, X, Shield, Key, CheckSquare, Printer, Upload, Image as ImageIcon, Database, Download, Wrench, Copy, Terminal } from 'lucide-react';
+import { Save, RefreshCw, Building2, FileText, Settings as SettingsIcon, Users, Plus, Edit2, Trash2, X, Shield, Key, CheckSquare, Printer, Upload, Image as ImageIcon, Database, Download, Wrench, Copy, Terminal, Wifi, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { t } from '../utils/t';
 
 export default function Settings() {
   const [settings, setSettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<'general' | 'invoice' | 'users' | 'printer' | 'backup' | 'database'>('general');
+  const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'CHECKING' | 'SUCCESS' | 'ERROR'>('IDLE');
   
   // Users Management State
   const [users, setUsers] = useState<any[]>([]);
@@ -154,6 +155,37 @@ create policy "Users manage their own invoice items" on invoice_items for all us
       alert("SQL Code Copied! Now paste it in Supabase SQL Editor.");
   };
 
+  const handleTestConnection = async () => {
+      if (!supabase) {
+          alert("Supabase not configured!");
+          return;
+      }
+      setConnectionStatus('CHECKING');
+      try {
+          // 1. Check Auth/Network
+          const { data: { session }, error: authError } = await supabase.auth.getSession();
+          if (authError) throw authError;
+          if (!session) throw new Error("Not logged in. Please Log out and Log in again.");
+
+          // 2. Check Database Access (RLS/Tables)
+          const { error: dbError } = await supabase.from('profiles').select('*').limit(1);
+          
+          if (dbError) {
+              if (dbError.code === '42P01') throw new Error("Connection OK, but TABLES MISSING. Please copy the SQL below and run it in Supabase.");
+              if (dbError.code === '42501') throw new Error("Connection OK, but PERMISSION DENIED. Please copy the SQL below and run it in Supabase.");
+              throw dbError;
+          }
+
+          setConnectionStatus('SUCCESS');
+          localStorage.removeItem('SYS_HEALTH'); // Clear any old error flags
+          window.dispatchEvent(new Event('sys-health-change'));
+          alert("✅ Connected Successfully! Database is ready.");
+      } catch (e: any) {
+          setConnectionStatus('ERROR');
+          alert(`❌ Connection Issue: ${e.message}`);
+      }
+  };
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex justify-between items-center">
@@ -181,12 +213,36 @@ create policy "Users manage their own invoice items" on invoice_items for all us
         {/* DATABASE SETUP TAB (THE SOLUTION) */}
         {activeTab === 'database' && (
             <div className="space-y-6 animate-in fade-in">
+                
+                {/* Connection Status Section */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
+                    <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-full ${connectionStatus === 'SUCCESS' ? 'bg-green-100 text-green-600' : connectionStatus === 'ERROR' ? 'bg-red-100 text-red-600' : 'bg-gray-200 text-gray-500'}`}>
+                            <Wifi className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-gray-800">Connection Status</h4>
+                            <p className="text-sm text-gray-500">
+                                {connectionStatus === 'SUCCESS' ? 'Connected to Supabase' : connectionStatus === 'ERROR' ? 'Connection Failed' : 'Unknown Status'}
+                            </p>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={handleTestConnection} 
+                        disabled={connectionStatus === 'CHECKING'}
+                        className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50"
+                    >
+                        {connectionStatus === 'CHECKING' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                        Test Connection
+                    </button>
+                </div>
+
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
                     <Shield className="w-6 h-6 text-amber-600 shrink-0 mt-1" />
                     <div>
                         <h4 className="font-bold text-amber-800">Supabase Permission Fix</h4>
                         <p className="text-sm text-amber-700 mt-1">
-                            If you see "Sync Failed" or "Permission Denied", your database tables are missing or locked.
+                            If the test above fails or you see "Sync Failed", your database tables are likely missing.
                             Copy the code below and run it in the <b>Supabase SQL Editor</b>.
                         </p>
                     </div>
