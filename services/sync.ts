@@ -4,7 +4,7 @@ import { supabase, isSupabaseConfigured } from './supabase';
 import { QueueItem } from '../types';
 import { authService } from './auth';
 
-/**
+/****
  * The Sync Engine
  * Handles pushing local offline changes to the Supabase server.
  */

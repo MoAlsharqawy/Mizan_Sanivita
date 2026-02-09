@@ -19,7 +19,7 @@ export const PERMISSIONS = [
 const ALL_PERMISSIONS_IDS = PERMISSIONS.map(p => p.id);
 
 export const authService = {
-  // Login with REAL Supabase Auth
+  // Login with REAL Supabase Auth***
   login: async (email: string, password: string): Promise<User> => {
     if (!supabase) throw new Error("Supabase not configured");
 
