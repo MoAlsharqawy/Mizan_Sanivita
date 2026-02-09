@@ -19,28 +19,39 @@ export default function Settings() {
       permissions: [] as string[]
   });
 
+  // --- THE CORRECTED SQL SCRIPT ---
   const SQL_SCRIPT = `
--- 1. Create Tables (If not exist)
+-- 1. CLEANUP (Prevent duplication errors)
+drop policy if exists "Users can manage their own profiles" on profiles;
+drop policy if exists "Users can manage their own customers" on customers;
+drop policy if exists "Users can manage their own invoices" on invoices;
+drop policy if exists "Users can manage their own invoice items" on invoice_items;
+
+-- 2. CREATE TABLES (Compatible with Frontend)
+
+-- Profiles (Users)
 create table if not exists public.profiles (
   id uuid references auth.users on delete cascade not null primary key,
   full_name text,
   updated_at timestamp with time zone
 );
 
+-- Customers
 create table if not exists public.customers (
-  id uuid primary key,
-  company_id uuid references auth.users(id),
+  id uuid primary key, -- Matches Sync Payload
+  company_id uuid references auth.users(id) not null, -- Critical for Security
   name text,
   phone text,
-  current_balance numeric,
+  current_balance numeric default 0,
   updated_at timestamp with time zone
 );
 
+-- Invoices
 create table if not exists public.invoices (
   id uuid primary key,
-  company_id uuid references auth.users(id),
+  company_id uuid references auth.users(id) not null,
   invoice_number text,
-  customer_id uuid, -- Link manually to allow offline flexibility
+  customer_id uuid references public.customers(id), -- Safe FK
   date timestamp with time zone,
   total_before_discount numeric,
   total_discount numeric,
@@ -50,37 +61,51 @@ create table if not exists public.invoices (
   updated_at timestamp with time zone
 );
 
+-- Invoice Items
+-- Note: product_id & batch_id are TEXT to allow local IDs like 'P1'
 create table if not exists public.invoice_items (
   id uuid primary key,
-  company_id uuid references auth.users(id),
+  company_id uuid references auth.users(id) not null,
   invoice_id uuid references public.invoices(id) on delete cascade,
-  product_id text,
+  product_id text, 
   batch_id text,
   quantity numeric,
   unit_price numeric,
   line_total numeric
 );
 
--- 2. ENABLE RLS
+-- 3. ENABLE SECURITY (RLS)
 alter table public.profiles enable row level security;
 alter table public.customers enable row level security;
 alter table public.invoices enable row level security;
 alter table public.invoice_items enable row level security;
 
--- 3. CREATE POLICIES (THE FIX)
+-- 4. CREATE ROBUST POLICIES
+-- Allow users to fully manage rows where company_id matches their Auth ID
+
 -- Profiles
-create policy "Public profiles are viewable by everyone." on profiles for select using ( true );
-create policy "Users can insert their own profile." on profiles for insert with check ( auth.uid() = id );
-create policy "Users can update own profile." on profiles for update using ( auth.uid() = id );
+create policy "Users can manage their own profiles" 
+on profiles for all using ( auth.uid() = id );
 
 -- Customers
-create policy "Users manage their own customers" on customers for all using ( auth.uid() = company_id );
+create policy "Users can manage their own customers" 
+on customers for all using ( auth.uid() = company_id );
 
 -- Invoices
-create policy "Users manage their own invoices" on invoices for all using ( auth.uid() = company_id );
+create policy "Users can manage their own invoices" 
+on invoices for all using ( auth.uid() = company_id );
 
 -- Invoice Items
-create policy "Users manage their own invoice items" on invoice_items for all using ( auth.uid() = company_id );
+create policy "Users can manage their own invoice items" 
+on invoice_items for all using ( auth.uid() = company_id );
+
+-- 5. STORAGE BUCKET (Optional, preventing errors if missing)
+insert into storage.buckets (id, name, public) 
+values ('logos', 'logos', true) 
+on conflict (id) do nothing;
+
+create policy "Logos are public" on storage.objects for select using ( bucket_id = 'logos' );
+create policy "Users upload logos" on storage.objects for insert with check ( bucket_id = 'logos' AND auth.uid() = owner );
   `;
 
   useEffect(() => {
