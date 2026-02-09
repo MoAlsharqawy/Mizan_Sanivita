@@ -19,30 +19,32 @@ export default function Settings() {
       permissions: [] as string[]
   });
 
-  // --- COMPLETE FRESH START SQL (UPDATED WITH ALL TABLES) ---
+  // --- FINAL COMPLETE SCHEMA (INCLUDES REPRESENTATIVES, SUPPLIERS, CASH, DEALS, ETC) ---
   const SQL_SCRIPT = `
--- ⚠️ تحذير: سيتم حذف جميع البيانات الحالية وإعادة البناء
--- 1. تنظيف (حذف الجداول القديمة)
+-- ⚠️ FINAL CLEANUP: REMOVE EVERYTHING TO REBUILD CORRECTLY
+DROP TABLE IF EXISTS public.activity_logs CASCADE;
+DROP TABLE IF EXISTS public.deals CASCADE;
+DROP TABLE IF EXISTS public.cash_transactions CASCADE;
+DROP TABLE IF EXISTS public.purchase_items CASCADE;
+DROP TABLE IF EXISTS public.purchase_invoices CASCADE;
 DROP TABLE IF EXISTS public.invoice_items CASCADE;
 DROP TABLE IF EXISTS public.invoices CASCADE;
-DROP TABLE IF EXISTS public.customers CASCADE;
+DROP TABLE IF EXISTS public.batches CASCADE;
 DROP TABLE IF EXISTS public.products CASCADE;
+DROP TABLE IF EXISTS public.customers CASCADE;
+DROP TABLE IF EXISTS public.suppliers CASCADE;
+DROP TABLE IF EXISTS public.representatives CASCADE;
+DROP TABLE IF EXISTS public.warehouses CASCADE;
 DROP TABLE IF EXISTS public.settings CASCADE;
 DROP TABLE IF EXISTS public.profiles CASCADE;
 
--- 2. إنشاء الجداول (Create Tables)
-
--- أ) المستخدمين (Profiles)
--- ملاحظة: بيانات الدخول (الإيميل والباسورد) مخزنة في جدول النظام auth.users
--- هذا الجدول (profiles) مخصص لبيانات الشركة الإضافية
+-- 1. BASE TABLES (Users & Settings)
 create table public.profiles (
   id uuid references auth.users on delete cascade not null primary key,
   full_name text,
-  subscription_tier text default 'free',
   updated_at timestamp with time zone
 );
 
--- ب) الإعدادات (Settings)
 create table public.settings (
   company_id uuid references auth.users(id) not null primary key,
   company_name text,
@@ -51,34 +53,78 @@ create table public.settings (
   tax_number text,
   currency text default '$',
   logo_url text,
+  invoice_template text,
   updated_at timestamp with time zone
 );
 
--- ج) المنتجات (Products)
--- نستخدم (id, company_id) كمفتاح مركب لأن المعرفات نصية ومحلية
-create table public.products (
-  id text not null, -- P1, P2 (Local ID)
-  company_id uuid references auth.users(id) not null,
-  code text,
-  name text,
-  purchase_price numeric,
-  selling_price numeric,
-  current_stock numeric default 0,
-  updated_at timestamp with time zone,
-  primary key (id, company_id)
-);
-
--- د) العملاء (Customers)
-create table public.customers (
+-- 2. LOOKUP TABLES (Warehouses, Reps)
+create table public.warehouses (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
   name text,
+  is_default boolean default false,
+  updated_at timestamp with time zone
+);
+
+create table public.representatives (
+  id uuid primary key,
+  company_id uuid references auth.users(id) not null,
+  code text,
+  name text,
   phone text,
+  updated_at timestamp with time zone
+);
+
+-- 3. PARTNERS (Suppliers, Customers)
+create table public.suppliers (
+  id uuid primary key,
+  company_id uuid references auth.users(id) not null,
+  code text,
+  name text,
+  phone text,
+  contact_person text,
   current_balance numeric default 0,
   updated_at timestamp with time zone
 );
 
--- هـ) الفواتير (Invoices)
+create table public.customers (
+  id uuid primary key,
+  company_id uuid references auth.users(id) not null,
+  representative_code text, -- Linked to representatives.code logic
+  code text,
+  name text,
+  phone text,
+  area text,
+  address text,
+  current_balance numeric default 0,
+  updated_at timestamp with time zone
+);
+
+-- 4. INVENTORY (Products, Batches)
+create table public.products (
+  id text not null, -- Local ID (P1, P2...)
+  company_id uuid references auth.users(id) not null,
+  code text,
+  name text,
+  updated_at timestamp with time zone,
+  primary key (id, company_id)
+);
+
+create table public.batches (
+  id uuid primary key,
+  company_id uuid references auth.users(id) not null,
+  product_id text,
+  warehouse_id text, -- ID of the warehouse
+  batch_number text,
+  selling_price numeric,
+  purchase_price numeric,
+  quantity numeric,
+  expiry_date timestamp with time zone,
+  status text,
+  updated_at timestamp with time zone
+);
+
+-- 5. TRANSACTIONS (Sales, Purchases, Cash)
 create table public.invoices (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
@@ -89,59 +135,107 @@ create table public.invoices (
   total_discount numeric,
   net_total numeric,
   payment_status text,
-  type text,
+  type text, -- SALE or RETURN
   updated_at timestamp with time zone
 );
 
--- و) عناصر الفاتورة (Invoice Items)
 create table public.invoice_items (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
   invoice_id uuid references public.invoices(id) on delete cascade,
-  product_id text, -- ربط غير مباشر مع products.id
-  batch_id text,
+  product_id text,
+  batch_id text, -- link to batch
   quantity numeric,
+  bonus_quantity numeric default 0,
   unit_price numeric,
+  discount_percentage numeric default 0,
   line_total numeric
 );
 
--- 3. تفعيل الحماية (Enable RLS)
-alter table public.profiles enable row level security;
-alter table public.settings enable row level security;
-alter table public.products enable row level security;
-alter table public.customers enable row level security;
-alter table public.invoices enable row level security;
-alter table public.invoice_items enable row level security;
+create table public.purchase_invoices (
+  id uuid primary key,
+  company_id uuid references auth.users(id) not null,
+  invoice_number text,
+  supplier_id uuid references public.suppliers(id),
+  date timestamp with time zone,
+  total_amount numeric,
+  paid_amount numeric,
+  type text, -- PURCHASE or RETURN
+  items jsonb, -- Store items as JSONB for simplicity in sync
+  updated_at timestamp with time zone
+);
 
--- 4. سياسات الأمان (Access Policies)
--- السماح للمستخدم برؤية وتعديل بياناته فقط
+create table public.cash_transactions (
+  id text not null, -- Custom ID format V2301-1
+  company_id uuid references auth.users(id) not null,
+  type text, -- RECEIPT / EXPENSE
+  category text,
+  amount numeric,
+  reference_id text, -- Generic ref
+  related_name text,
+  date timestamp with time zone,
+  notes text,
+  updated_at timestamp with time zone,
+  primary key (id, company_id)
+);
 
--- Profiles
-create policy "Users own profile" on profiles for all using ( auth.uid() = id );
+-- 6. ADVANCED FEATURES (Deals, Logs)
+create table public.deals (
+  id uuid primary key,
+  company_id uuid references auth.users(id) not null,
+  doctor_name text,
+  representative_code text,
+  cycles jsonb, -- Store complex cycle history as JSON
+  customer_ids jsonb, -- Store linked customers as JSON array
+  created_at timestamp with time zone
+);
 
--- Settings
-create policy "Users own settings" on settings for all using ( auth.uid() = company_id );
+create table public.activity_logs (
+  id uuid primary key,
+  company_id uuid references auth.users(id) not null,
+  user_name text,
+  action text,
+  entity text,
+  details text,
+  timestamp timestamp with time zone
+);
 
--- Products
-create policy "Users own products" on products for all using ( auth.uid() = company_id );
+-- 7. SECURITY (Row Level Security)
+alter table profiles enable row level security;
+alter table settings enable row level security;
+alter table warehouses enable row level security;
+alter table representatives enable row level security;
+alter table suppliers enable row level security;
+alter table customers enable row level security;
+alter table products enable row level security;
+alter table batches enable row level security;
+alter table invoices enable row level security;
+alter table invoice_items enable row level security;
+alter table purchase_invoices enable row level security;
+alter table cash_transactions enable row level security;
+alter table deals enable row level security;
+alter table activity_logs enable row level security;
 
--- Customers
-create policy "Users own customers" on customers for all using ( auth.uid() = company_id );
+-- 8. POLICIES (Data Isolation per User/Company)
+create policy "Auth Profile" on profiles for all using (auth.uid() = id);
+create policy "Auth Settings" on settings for all using (auth.uid() = company_id);
+create policy "Auth Warehouses" on warehouses for all using (auth.uid() = company_id);
+create policy "Auth Reps" on representatives for all using (auth.uid() = company_id);
+create policy "Auth Suppliers" on suppliers for all using (auth.uid() = company_id);
+create policy "Auth Customers" on customers for all using (auth.uid() = company_id);
+create policy "Auth Products" on products for all using (auth.uid() = company_id);
+create policy "Auth Batches" on batches for all using (auth.uid() = company_id);
+create policy "Auth Invoices" on invoices for all using (auth.uid() = company_id);
+create policy "Auth InvItems" on invoice_items for all using (auth.uid() = company_id);
+create policy "Auth Purchases" on purchase_invoices for all using (auth.uid() = company_id);
+create policy "Auth Cash" on cash_transactions for all using (auth.uid() = company_id);
+create policy "Auth Deals" on deals for all using (auth.uid() = company_id);
+create policy "Auth Logs" on activity_logs for all using (auth.uid() = company_id);
 
--- Invoices
-create policy "Users own invoices" on invoices for all using ( auth.uid() = company_id );
-
--- Invoice Items
-create policy "Users own items" on invoice_items for all using ( auth.uid() = company_id );
-
--- 5. التخزين (Storage)
-insert into storage.buckets (id, name, public) 
-values ('logos', 'logos', true) 
-on conflict (id) do nothing;
-
+-- 9. STORAGE
+insert into storage.buckets (id, name, public) values ('logos', 'logos', true) on conflict (id) do nothing;
 drop policy if exists "Logos Public" on storage.objects;
 drop policy if exists "Logos Upload" on storage.objects;
-
 create policy "Logos Public" on storage.objects for select using ( bucket_id = 'logos' );
 create policy "Logos Upload" on storage.objects for insert with check ( bucket_id = 'logos' AND auth.uid() = owner );
   `;
@@ -231,6 +325,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
           if (!session) throw new Error("Not logged in. Please Log out and Log in again.");
 
           // 2. Check Database Access (RLS/Tables)
+          // Try to access a critical table like representatives or profiles
           const { error: dbError } = await supabase.from('profiles').select('*').limit(1);
           
           if (dbError) {
@@ -242,7 +337,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
           setConnectionStatus('SUCCESS');
           localStorage.removeItem('SYS_HEALTH'); // Clear any old error flags
           window.dispatchEvent(new Event('sys-health-change'));
-          alert("✅ Connected Successfully! Database is ready.");
+          alert("✅ Connected Successfully! Database is fully structured.");
       } catch (e: any) {
           setConnectionStatus('ERROR');
           alert(`❌ Connection Issue: ${e.message}`);
@@ -303,9 +398,10 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
                     <Shield className="w-6 h-6 text-amber-600 shrink-0 mt-1" />
                     <div>
-                        <h4 className="font-bold text-amber-800">Fresh Start SQL Script</h4>
+                        <h4 className="font-bold text-amber-800">Complete Database Reset Script</h4>
                         <p className="text-sm text-amber-700 mt-1">
-                            This script will <b>DROP ALL EXISTING TABLES</b> and recreate them correctly with <b>Products, Settings, and Profiles</b> tables.
+                            This script includes <b>Representatives, Suppliers, Deals, Cash Log, Warehouses, Batches, and all other tables</b>.
+                            Running this will delete existing cloud data and rebuild the structure perfectly.
                         </p>
                     </div>
                 </div>
