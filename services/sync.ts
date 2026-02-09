@@ -2,6 +2,7 @@
 import { db } from './db';
 import { supabase, isSupabaseConfigured } from './supabase';
 import { QueueItem } from '../types';
+import { authService } from './auth';
 
 /**
  * The Sync Engine
@@ -11,37 +12,26 @@ import { QueueItem } from '../types';
 class SyncService {
     private isSyncing = false;
 
-    // Helper to get current company ID from session
-    private getCompanyId(): string | null {
-        const userStr = localStorage.getItem('user');
-        if (!userStr) return null;
-        try {
-            const user = JSON.parse(userStr);
-            return user.company_id || null;
-        } catch (e) {
-            return null;
-        }
+    // Helper to get current company ID from AUTHENTICATED session
+    // In single-tenant mode, Company ID === User ID
+    private async getEffectiveCompanyId(): Promise<string | null> {
+        if (!supabase) return null;
+        const { data: { session } } = await supabase.auth.getSession();
+        return session?.user?.id || null;
     }
 
     async sync() {
         if (this.isSyncing || !isSupabaseConfigured() || !navigator.onLine) return;
         
-        const companyId = this.getCompanyId();
-        
-        // STOP SYNC IF WE ARE IN EMERGENCY MODE (NO DB PERMISSION)
-        if (!companyId || companyId === 'emergency_access') {
-            return;
-        }
-
-        // CRITICAL CHECK: Do we have a valid session?
-        if (!supabase) return;
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
+        // 1. Check Authentication
+        const companyId = await this.getEffectiveCompanyId();
+        if (!companyId) {
+            console.log('Skipping sync: No active Supabase session.');
             return;
         }
 
         this.isSyncing = true;
-        console.log('🔄 Sync Started...');
+        console.log('🔄 Sync Started for ID:', companyId);
 
         try {
             // 1. Get Pending Items
@@ -58,7 +48,7 @@ class SyncService {
 
             // 2. Process Items
             for (const item of pendingItems) {
-                await this.processItem(item);
+                await this.processItem(item, companyId);
             }
 
         } catch (error) {
@@ -68,20 +58,19 @@ class SyncService {
         }
     }
 
-    private async processItem(item: QueueItem) {
+    private async processItem(item: QueueItem, companyId: string) {
         try {
             let success = false;
 
-            // Simple exponential backoff or retry limit check
             if (item.retries && item.retries > 5) {
                 await db.queue.update(item.id!, { status: 'FAILED', error_log: 'Max retries exceeded' });
                 return;
             }
 
             if (item.action_type === 'CREATE_INVOICE') {
-                success = await this.pushInvoice(item.payload);
+                success = await this.pushInvoiceDirect(item.payload, companyId);
             } else if (item.action_type === 'UPDATE_CUSTOMER') {
-                success = await this.pushCustomerUpdate(item.payload);
+                success = await this.pushCustomerUpdate(item.payload, companyId);
             }
 
             if (success) {
@@ -101,90 +90,14 @@ class SyncService {
         }
     }
 
-    private async pushInvoice(invoice: any): Promise<boolean> {
+    // Direct Table Insertion Strategy (Bypassing complex RPCs for single-tenant reliability)
+    private async pushInvoiceDirect(invoice: any, companyId: string): Promise<boolean> {
         if (!supabase) return false;
-
-        const payload = {
-            p_invoice_id: invoice.id,
-            p_customer_id: invoice.customer_id,
-            p_invoice_number: invoice.invoice_number,
-            p_date: invoice.date,
-            p_type: invoice.type,
-            p_net_total: invoice.net_total,
-            p_items: invoice.items.map((item: any) => ({
-                product_id: item.product.id,
-                batch_id: item.batch.id,
-                quantity: item.quantity,
-                bonus_quantity: item.bonus_quantity,
-                unit_price: item.unit_price || item.batch.selling_price,
-                discount_percentage: item.discount_percentage,
-                total: (item.quantity * (item.unit_price || item.batch.selling_price)) * (1 - (item.discount_percentage/100))
-            }))
-        };
-
-        const { error } = await supabase.rpc('sync_invoice_transaction', payload);
-
-        if (error) {
-            console.error('RPC Error:', error);
-
-            // --- HANDLING 1: Foreign Key Violation (Missing Customer) ---
-            if (error.code === '23503') {
-                console.warn(`Sync failed due to missing dependency (Customer: ${invoice.customer_id}). Attempting JIT sync...`);
-                
-                // 1. Fetch Customer from Local DB
-                const localCustomer = await db.customers.get(invoice.customer_id);
-                
-                if (localCustomer) {
-                    // 2. Force Sync Customer
-                    const custSuccess = await this.pushCustomerUpdate(localCustomer);
-                    
-                    if (custSuccess) {
-                        console.log("JIT Customer Sync Successful. Retrying Invoice Sync...");
-                        // 3. Recursive Retry
-                        return this.pushInvoice(invoice);
-                    }
-                } else {
-                    console.error("Critical: Referenced customer not found in local DB.");
-                }
-                return false; 
-            }
-            
-            // --- HANDLING 2: Idempotency (Duplicates) ---
-            if (
-                error.code === '23505' || 
-                error.message?.toLowerCase().includes('unique') || 
-                error.message?.toLowerCase().includes('duplicate')
-            ) {
-                console.warn(`Sync for invoice ${invoice.invoice_number} treated as success (Duplicate/Idempotent).`);
-                return true; 
-            }
-
-            // --- HANDLING 3: Missing RPC Function ---
-            if (
-                error.code === 'PGRST202' || 
-                error.message?.includes('function not found') || 
-                (error as any).status === 404
-            ) {
-                console.warn('Backend RPC missing. Attempting direct table insert fallback...');
-                return this.pushInvoiceDirect(invoice);
-            }
-
-            return false;
-        }
-
-        return true;
-    }
-
-    // Fallback method for direct table insertion
-    private async pushInvoiceDirect(invoice: any): Promise<boolean> {
-        if (!supabase) return false;
-        const companyId = this.getCompanyId();
-        if (!companyId || companyId === 'emergency_access') return false;
         
         // 1. Upsert Invoice
         const { error: invError } = await supabase.from('invoices').upsert({
             id: invoice.id,
-            company_id: companyId, // INJECTED
+            company_id: companyId, // FORCE INJECT REAL ID
             invoice_number: invoice.invoice_number,
             customer_id: invoice.customer_id,
             date: invoice.date,
@@ -197,24 +110,25 @@ class SyncService {
         });
         
         if (invError) {
-             // Catch FK error here too for direct insert
+             // Catch FK error (Missing Customer)
              if (invError.code === '23503') {
                  console.warn("Direct Insert FK Error. Retrying customer sync...");
                  const localCustomer = await db.customers.get(invoice.customer_id);
-                 if (localCustomer && await this.pushCustomerUpdate(localCustomer)) {
-                     return this.pushInvoiceDirect(invoice);
+                 if (localCustomer && await this.pushCustomerUpdate(localCustomer, companyId)) {
+                     // Retry self
+                     return this.pushInvoiceDirect(invoice, companyId);
                  }
              }
              console.error('Direct Sync Invoice Error', invError);
              return false;
         }
 
-        // 2. Upsert Items
+        // 2. Upsert Items (Delete old items first to handle updates purely)
         await supabase.from('invoice_items').delete().eq('invoice_id', invoice.id);
         
         const itemsPayload = invoice.items.map((item: any) => ({
-            id: crypto.randomUUID(), // Generate ID for item
-            company_id: companyId, // INJECTED
+            id: crypto.randomUUID(),
+            company_id: companyId, // FORCE INJECT REAL ID
             invoice_id: invoice.id,
             product_id: item.product.id,
             batch_id: item.batch.id,
@@ -235,19 +149,14 @@ class SyncService {
         return true;
     }
 
-    private async pushCustomerUpdate(customer: any): Promise<boolean> {
+    private async pushCustomerUpdate(customer: any, companyId: string): Promise<boolean> {
         if (!supabase) return false;
-        const companyId = this.getCompanyId();
-        
-        if (!companyId || companyId === 'emergency_access') {
-            return false;
-        }
         
         const { error } = await supabase
             .from('customers')
             .upsert({
                 id: customer.id,
-                company_id: companyId, // INJECTED
+                company_id: companyId, // FORCE INJECT REAL ID
                 name: customer.name,
                 phone: customer.phone,
                 current_balance: customer.current_balance,
@@ -264,8 +173,9 @@ class SyncService {
 
 export const syncService = new SyncService();
 
+// Aggressive sync interval
 setInterval(() => {
     syncService.sync();
-}, 30000);
+}, 10000);
 
 window.addEventListener('online', () => syncService.sync());

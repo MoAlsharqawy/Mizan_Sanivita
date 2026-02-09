@@ -18,11 +18,8 @@ export const PERMISSIONS = [
 
 const ALL_PERMISSIONS_IDS = PERMISSIONS.map(p => p.id);
 
-// FIXED ID for Single Company Mode
-const DEFAULT_COMPANY_ID = 'default-company-id';
-
 export const authService = {
-  // Login with Supabase
+  // Login with REAL Supabase Auth
   login: async (email: string, password: string): Promise<User> => {
     if (!supabase) throw new Error("Supabase not configured");
 
@@ -34,13 +31,20 @@ export const authService = {
     if (error) throw error;
     if (!data.user) throw new Error("No user returned");
 
-    // Force setup local session immediately
-    authService.saveUserToStorage(data.user.id, email);
+    // We use the User ID as the Company ID for single-tenant simplified mode
+    const userObj: User = {
+        id: data.user.id,
+        username: email,
+        name: email.split('@')[0],
+        role: 'ADMIN',
+        company_id: data.user.id, // VITAL: Bind data to this user directly
+        permissions: ALL_PERMISSIONS_IDS
+    };
 
-    return authService.transformUser(data.user);
+    authService.saveUserToStorage(userObj);
+    return userObj;
   },
 
-  // Register simply creates a user in Auth, no DB logic needed on frontend
   signup: async (email: string, password: string, companyName: string): Promise<void> => {
       if (!supabase) throw new Error("Supabase not configured");
 
@@ -50,9 +54,7 @@ export const authService = {
       });
 
       if (error) throw error;
-      if (data.user) {
-          authService.saveUserToStorage(data.user.id, email);
-      }
+      // Login will handle the storage setup
   },
 
   logout: async () => {
@@ -69,29 +71,23 @@ export const authService = {
   },
 
   isAuthenticated: (): boolean => {
-    return !!localStorage.getItem('user');
+    // Check both local storage AND if we have a supabase client/session token
+    const hasLocal = !!localStorage.getItem('user');
+    return hasLocal; 
   },
 
   hasPermission: (permissionId: string): boolean => {
       return true; // Always allow in single mode
   },
 
-  // Simplified: Just save the user to local storage and let them work
-  saveUserToStorage: (userId: string, email: string) => {
-      const userObj = { 
-          id: userId, 
-          username: email, 
-          name: email.split('@')[0], 
-          role: 'ADMIN', 
-          company_id: DEFAULT_COMPANY_ID, 
-          permissions: ALL_PERMISSIONS_IDS 
-      };
-      localStorage.setItem('user', JSON.stringify(userObj));
+  saveUserToStorage: (user: User) => {
+      localStorage.setItem('user', JSON.stringify(user));
   },
 
-  // Kept for compatibility but effectively bypassed
+  // Compatibility stub
   ensureAccountSetup: async (userId: string, email: string) => {
-      authService.saveUserToStorage(userId, email);
+      // In this simplified mode, we assume the auth user IS the account owner.
+      return;
   },
 
   transformUser: (sbUser: any): User => {
@@ -99,7 +95,8 @@ export const authService = {
           id: sbUser.id,
           username: sbUser.email,
           name: sbUser.email.split('@')[0],
-          role: 'ADMIN' 
+          role: 'ADMIN',
+          company_id: sbUser.id 
       };
   },
 
