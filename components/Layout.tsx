@@ -54,16 +54,33 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       }
   };
 
-  const handleCopySql = () => {
-      const sql = `
+  // Define the comprehensive SQL fix string
+  const sqlFixContent = `
+-- 1. Enable RLS
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
+
+-- 2. PROFILES Policies (Drop & Create to avoid conflicts)
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
 CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
 CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
 
-CREATE POLICY "Allow users to view their companies" ON public.companies FOR SELECT USING (auth.uid() = created_by OR id IN (SELECT company_id FROM public.profiles WHERE id = auth.uid()));
+-- 3. COMPANIES Policies
+DROP POLICY IF EXISTS "Users can view own companies" ON public.companies;
+DROP POLICY IF EXISTS "Allow users to view their companies" ON public.companies; -- Cleaning up old names
+CREATE POLICY "Users can view own companies" ON public.companies FOR SELECT USING (auth.uid() = created_by OR id IN (SELECT company_id FROM public.profiles WHERE id = auth.uid()));
+
+DROP POLICY IF EXISTS "Users can create companies" ON public.companies;
 CREATE POLICY "Users can create companies" ON public.companies FOR INSERT WITH CHECK (auth.uid() = created_by);
-      `;
-      navigator.clipboard.writeText(sql);
+`;
+
+  const handleCopySql = () => {
+      navigator.clipboard.writeText(sqlFixContent);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
   };
@@ -356,19 +373,7 @@ CREATE POLICY "Users can create companies" ON public.companies FOR INSERT WITH C
                         </p>
                         
                         <div className="relative bg-slate-900 rounded-lg p-4 font-mono text-xs text-green-400 overflow-x-auto border border-slate-700">
-                            <pre>{`
--- 1. FIX PROFILES TABLE
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
-CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
-DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
-CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
-
--- 2. FIX COMPANIES TABLE
-ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Allow users to view their companies" ON public.companies;
-CREATE POLICY "Allow users to view their companies" ON public.companies FOR SELECT USING (auth.uid() = created_by OR id IN (SELECT company_id FROM public.profiles WHERE id = auth.uid()));
-                            `}</pre>
+                            <pre>{sqlFixContent}</pre>
                             <button 
                                 onClick={handleCopySql}
                                 className="absolute top-2 right-2 bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors flex items-center gap-2"
