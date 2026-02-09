@@ -18,6 +18,9 @@ export const PERMISSIONS = [
 
 const ALL_PERMISSIONS_IDS = PERMISSIONS.map(p => p.id);
 
+// FIXED ID for Single Company Mode
+const DEFAULT_COMPANY_ID = 'default-company-id';
+
 export const authService = {
   // Login with Supabase
   login: async (email: string, password: string): Promise<User> => {
@@ -31,13 +34,13 @@ export const authService = {
     if (error) throw error;
     if (!data.user) throw new Error("No user returned");
 
-    // Check if profile exists, if not, initialize the account
-    await authService.ensureAccountSetup(data.user.id, email);
+    // Force setup local session immediately
+    authService.saveUserToStorage(data.user.id, email);
 
     return authService.transformUser(data.user);
   },
 
-  // Register new user (Creates Company + Profile)
+  // Register simply creates a user in Auth, no DB logic needed on frontend
   signup: async (email: string, password: string, companyName: string): Promise<void> => {
       if (!supabase) throw new Error("Supabase not configured");
 
@@ -48,7 +51,7 @@ export const authService = {
 
       if (error) throw error;
       if (data.user) {
-          await authService.ensureAccountSetup(data.user.id, email, companyName);
+          authService.saveUserToStorage(data.user.id, email);
       }
   },
 
@@ -70,90 +73,25 @@ export const authService = {
   },
 
   hasPermission: (permissionId: string): boolean => {
-      const userString = localStorage.getItem('user');
-      if (!userString) return false;
-      const user = JSON.parse(userString) as User;
-      if (user.role === 'ADMIN') return true;
-      return user.permissions?.includes(permissionId) || false;
+      return true; // Always allow in single mode
   },
 
-  // Helper: Ensures the user has a Company and Profile in SQL
-  ensureAccountSetup: async (userId: string, email: string, newCompanyName: string = 'My Company') => {
-      if (!supabase) return;
-
-      const saveUserToStorage = (id: string, email: string, name: string, role: string, companyId: string, perms: string[]) => {
-          const userObj = { id, username: email, name, role, company_id: companyId, permissions: perms };
-          localStorage.setItem('user', JSON.stringify(userObj));
+  // Simplified: Just save the user to local storage and let them work
+  saveUserToStorage: (userId: string, email: string) => {
+      const userObj = { 
+          id: userId, 
+          username: email, 
+          name: email.split('@')[0], 
+          role: 'ADMIN', 
+          company_id: DEFAULT_COMPANY_ID, 
+          permissions: ALL_PERMISSIONS_IDS 
       };
+      localStorage.setItem('user', JSON.stringify(userObj));
+  },
 
-      try {
-          // 1. Try to fetch existing profile
-          // We use maybeSingle to prevent errors if not found
-          const { data: profile, error: profileError } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
-
-          if (profile) {
-              saveUserToStorage(userId, email, profile.full_name || email.split('@')[0], profile.role || 'USER', profile.company_id, ALL_PERMISSIONS_IDS);
-              return;
-          }
-
-          // 2. If no profile found (or RLS blocked it), try to Bootstrap
-          console.log("Bootstrapping new account...");
-          
-          const { data: rpcData, error: rpcError } = await supabase.rpc('register_new_company', {
-              p_company_name: newCompanyName,
-              p_full_name: email.split('@')[0]
-          });
-
-          if (!rpcError) {
-              // Success creating new account
-              const companyId = (rpcData as any)?.company_id;
-              saveUserToStorage(userId, email, email.split('@')[0], 'ADMIN', companyId, ALL_PERMISSIONS_IDS);
-              return;
-          }
-
-          // 3. Error Handling & Recoveries
-          
-          // Case A: RPC Missing (Backend not set up)
-          if (rpcError.message.includes('function not found')) {
-             throw new Error("Setup Error: Please run the SQL setup script (register_new_company function) in Supabase Dashboard.");
-          }
-
-          // Case B: Conflict (Account likely exists but read failed earlier due to RLS)
-          if (rpcError.code === '23505' || rpcError.message?.includes('duplicate key') || rpcError.message?.includes('Conflict')) {
-              console.warn("Account exists. Attempting recovery...");
-
-              // Retry Profile Fetch
-              const { data: retryProfile } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
-              
-              if (retryProfile) {
-                  saveUserToStorage(userId, email, retryProfile.full_name, retryProfile.role, retryProfile.company_id, ALL_PERMISSIONS_IDS);
-                  return;
-              }
-
-              // Case C: RLS BLOCKING PROFILE READ
-              // If we are here, we are authenticated but the DB won't let us read our own profile.
-              // Fallback: Check if user owns a company directly.
-              const { data: company } = await supabase.from('companies').select('id, name').eq('created_by', userId).maybeSingle();
-
-              if (company) {
-                  console.log("Recovered via Company Ownership.");
-                  saveUserToStorage(userId, email, email.split('@')[0], 'ADMIN', company.id, ALL_PERMISSIONS_IDS);
-                  return;
-              }
-          }
-
-          // --- FAILSAFE: EMERGENCY ACCESS ---
-          // If all DB calls fail (likely 403 Forbidden due to RLS), but we HAVE a userId from Auth
-          // We MUST let the user in.
-          console.error("Database Access Blocked (RLS). Activating Emergency Session.");
-          saveUserToStorage(userId, email, email.split('@')[0], 'ADMIN', 'emergency_access', ALL_PERMISSIONS_IDS);
-          return;
-
-      } catch (e) {
-          console.error("Account Setup Critical Failure:", e);
-          // Even on crash, let them in if we have ID
-          saveUserToStorage(userId, email, email.split('@')[0], 'ADMIN', 'emergency_access', ALL_PERMISSIONS_IDS);
-      }
+  // Kept for compatibility but effectively bypassed
+  ensureAccountSetup: async (userId: string, email: string) => {
+      authService.saveUserToStorage(userId, email);
   },
 
   transformUser: (sbUser: any): User => {
@@ -161,7 +99,7 @@ export const authService = {
           id: sbUser.id,
           username: sbUser.email,
           name: sbUser.email.split('@')[0],
-          role: 'USER' 
+          role: 'ADMIN' 
       };
   },
 

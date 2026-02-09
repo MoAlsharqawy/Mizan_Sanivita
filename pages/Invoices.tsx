@@ -218,9 +218,17 @@ const Invoices: React.FC = () => {
                              <tr className="bg-gray-100"><th className="border p-2">Item</th><th className="border p-2">Qty</th><th className="border p-2">Total</th></tr>
                          </thead>
                          <tbody>
-                             {selectedInvoice.items.map((item, idx) => (
-                                 <tr key={idx}><td className="border p-2">{item.product.name}</td><td className="border p-2">{item.quantity}</td><td className="border p-2">{item.line_total || (item.quantity * item.batch.selling_price).toFixed(2)}</td></tr>
-                             ))}
+                             {selectedInvoice.items.map((item, idx) => {
+                                 const price = item.unit_price !== undefined ? item.unit_price : item.batch.selling_price;
+                                 const total = (item.quantity * price) * (1 - (item.discount_percentage / 100));
+                                 return (
+                                     <tr key={idx}>
+                                         <td className="border p-2">{item.product.name}</td>
+                                         <td className="border p-2">{item.quantity}</td>
+                                         <td className="border p-2">{currency}{total.toFixed(2)}</td>
+                                     </tr>
+                                 );
+                             })}
                          </tbody>
                      </table>
                      <div className="mt-4 text-right font-bold text-xl">Total: {currency}{selectedInvoice.net_total}</div>
