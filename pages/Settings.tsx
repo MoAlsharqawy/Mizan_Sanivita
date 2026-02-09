@@ -84,6 +84,10 @@ create policy "Users manage their own invoice items" on invoice_items for all us
 
   useEffect(() => {
     db.getSettings().then(setSettings);
+    // Auto-open Database tab if there is a sync error
+    if (localStorage.getItem('SYS_HEALTH')) {
+        setActiveTab('database');
+    }
   }, []);
 
   useEffect(() => {

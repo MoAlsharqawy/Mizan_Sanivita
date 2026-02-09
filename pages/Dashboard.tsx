@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { db } from '../services/db';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { TrendingUp, Users, AlertTriangle, PlusCircle, FileText, UserPlus, PackagePlus, Coins, Truck, ArrowRight, Building2 } from 'lucide-react';
+import { TrendingUp, Users, AlertTriangle, PlusCircle, FileText, UserPlus, PackagePlus, Coins, Truck, ArrowRight, Building2, Database, ShieldAlert } from 'lucide-react';
 import { t } from '../utils/t';
 import { useNavigate } from 'react-router-dom';
 
@@ -47,6 +47,14 @@ const Dashboard: React.FC = () => {
       cash: 0,
       salesData: [] as any[]
   });
+  const [sysHealth, setSysHealth] = useState<string | null>(localStorage.getItem('SYS_HEALTH'));
+
+  // Listen for sync health changes
+  useEffect(() => {
+      const handleHealthChange = () => setSysHealth(localStorage.getItem('SYS_HEALTH'));
+      window.addEventListener('sys-health-change', handleHealthChange);
+      return () => window.removeEventListener('sys-health-change', handleHealthChange);
+  }, []);
 
   // Async Data Fetching
   useEffect(() => {
@@ -82,6 +90,34 @@ const Dashboard: React.FC = () => {
   return (
     <div className="space-y-8 pb-10">
       
+      {/* ⚠️ CRITICAL SYSTEM ALERT ⚠️ */}
+      {sysHealth && (
+          <div className="bg-red-600 text-white p-4 rounded-xl shadow-lg flex flex-col md:flex-row items-center justify-between gap-4 animate-pulse border-2 border-red-400">
+              <div className="flex items-center gap-4">
+                  <div className="bg-white/20 p-3 rounded-full shrink-0">
+                      <Database className="w-6 h-6" />
+                  </div>
+                  <div>
+                      <h3 className="font-bold text-lg flex items-center gap-2">
+                          Database Synchronization Failed
+                          <ShieldAlert className="w-5 h-5" />
+                      </h3>
+                      <p className="text-red-100 text-sm">
+                          {sysHealth === 'MISSING_TABLES' 
+                              ? 'Your cloud database is missing required tables.' 
+                              : 'Permission Denied. The cloud database is rejecting your data.'}
+                      </p>
+                  </div>
+              </div>
+              <button 
+                  onClick={() => navigate('/settings')} 
+                  className="bg-white text-red-600 px-6 py-2.5 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-gray-100 transition-colors shadow-md whitespace-nowrap"
+              >
+                  Fix Now <ArrowRight className="w-4 h-4" />
+              </button>
+          </div>
+      )}
+
       {/* 0. Company Identity Card */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex flex-col md:flex-row items-center gap-6 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-2 h-full bg-blue-600"></div>
