@@ -81,77 +81,77 @@ export const authService = {
   ensureAccountSetup: async (userId: string, email: string, newCompanyName: string = 'My Company') => {
       if (!supabase) return;
 
-      // 1. Check Profile - Use maybeSingle() to avoid 406 error on empty result
-      // We ignore errors here initially to allow the RPC recovery flow to handle inconsistencies
+      const saveUserToStorage = (id: string, email: string, name: string, role: string, companyId: string, perms: string[]) => {
+          const userObj = { id, username: email, name, role, company_id: companyId, permissions: perms };
+          localStorage.setItem('user', JSON.stringify(userObj));
+      };
+
+      // 1. Try to fetch existing profile
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
 
       if (profile) {
-          // User exists, update local storage
-          const userObj = {
-              id: userId,
-              username: email,
-              name: profile.full_name || email.split('@')[0],
-              role: profile.role || 'USER',
-              company_id: profile.company_id,
-              permissions: ALL_PERMISSIONS_IDS 
-          };
-          localStorage.setItem('user', JSON.stringify(userObj));
+          saveUserToStorage(userId, email, profile.full_name || email.split('@')[0], profile.role || 'USER', profile.company_id, ALL_PERMISSIONS_IDS);
           return;
       }
 
-      // 2. No Profile? Create Company + Profile (Bootstrap)
+      // 2. If no profile found (or RLS blocked it), try to Bootstrap
       console.log("Bootstrapping new account...");
       
-      // USE RPC FUNCTION TO BYPASS RLS ISSUES DURING CREATION
       const { data: rpcData, error: rpcError } = await supabase.rpc('register_new_company', {
           p_company_name: newCompanyName,
           p_full_name: email.split('@')[0]
       });
 
-      if (rpcError) {
-          // HANDLE CONFLICT: If user already exists (code 23505), try to read profile again aggressively.
-          if (rpcError.code === '23505' || rpcError.message?.includes('duplicate key')) {
-              console.warn("Account already exists. Retrying profile fetch...");
-              
-              const { data: retryProfile, error: retryError } = await supabase.from('profiles').select('*').eq('id', userId).single();
-              
-              if (retryProfile) {
-                  const userObj = {
-                      id: userId,
-                      username: email,
-                      name: retryProfile.full_name || email.split('@')[0],
-                      role: retryProfile.role || 'USER',
-                      company_id: retryProfile.company_id,
-                      permissions: ALL_PERMISSIONS_IDS 
-                  };
-                  localStorage.setItem('user', JSON.stringify(userObj));
-                  return;
-              } else {
-                  console.error("Profile Fetch Error after Conflict:", retryError);
-                  throw new Error("Account exists but cannot be accessed. Please check database permissions (RLS).");
-              }
-          }
-
-          console.error("Account Creation Error:", rpcError);
-          // Fallback: If function doesn't exist, throw specific error asking to run SQL
-          if (rpcError.message.includes('function not found')) {
-             throw new Error("Setup Error: Please run the SQL setup script (register_new_company function) in Supabase Dashboard.");
-          }
-          throw new Error("Failed to set up account: " + rpcError.message);
+      if (!rpcError) {
+          // Success creating new account
+          const companyId = (rpcData as any)?.company_id;
+          saveUserToStorage(userId, email, email.split('@')[0], 'ADMIN', companyId, ALL_PERMISSIONS_IDS);
+          return;
       }
 
-      const companyId = (rpcData as any)?.company_id;
+      // 3. Error Handling & Fallbacks
+      
+      // Case A: RPC Missing (Backend not set up)
+      if (rpcError.message.includes('function not found')) {
+          throw new Error("Setup Error: Please run the SQL setup script (register_new_company function) in Supabase Dashboard.");
+      }
 
-      // C. Save to Local Storage
-      const userObj = {
-          id: userId,
-          username: email,
-          name: email.split('@')[0],
-          role: 'ADMIN',
-          company_id: companyId,
-          permissions: ALL_PERMISSIONS_IDS
-      };
-      localStorage.setItem('user', JSON.stringify(userObj));
+      // Case B: Conflict (Account likely exists)
+      if (rpcError.code === '23505' || rpcError.message?.includes('duplicate key') || rpcError.message?.includes('Conflict')) {
+          console.warn("Account exists. Attempting recovery...");
+
+          // Retry Profile Fetch
+          const { data: retryProfile } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+          
+          if (retryProfile) {
+              saveUserToStorage(userId, email, retryProfile.full_name, retryProfile.role, retryProfile.company_id, ALL_PERMISSIONS_IDS);
+              return;
+          }
+
+          // Case C: RLS BLOCKING PROFILE READ (The actual error you are seeing)
+          // Fallback: Check if user owns a company directly.
+          console.warn("Profile read blocked. Trying Company Ownership Fallback...");
+          const { data: company } = await supabase.from('companies').select('id, name').eq('created_by', userId).maybeSingle();
+
+          if (company) {
+              console.log("Recovered via Company Ownership.");
+              // Assume Admin role since they are the creator
+              saveUserToStorage(userId, email, email.split('@')[0], 'ADMIN', company.id, ALL_PERMISSIONS_IDS);
+              return;
+          }
+          
+          // If we reach here, we really can't access data
+          const sqlFix = `
+Please run this SQL in Supabase Dashboard to fix permissions:
+
+CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
+CREATE POLICY "Allow users to view their companies" ON public.companies FOR SELECT USING (auth.uid() = created_by OR id IN (SELECT company_id FROM public.profiles WHERE id = auth.uid()));
+          `;
+          console.error(sqlFix);
+          throw new Error("Database Permission Error. See console for SQL fix.");
+      }
+
+      throw new Error("Failed to set up account: " + rpcError.message);
   },
 
   transformUser: (sbUser: any): User => {
