@@ -91,29 +91,6 @@ class MizanDatabase extends Dexie {
             { id: 'W3', name: 'Van 2', is_default: false }
         ]);
 
-        const products = [
-            { id: 'P1', code: 'P001', name: 'Paracetamol 500mg' },
-            { id: 'P2', code: 'P002', name: 'Amoxicillin 250mg' },
-            { id: 'P3', code: 'P003', name: 'Ibuprofen 400mg' },
-            { id: 'P4', code: 'P004', name: 'Vitamin C 1000mg' },
-            { id: 'P5', code: 'P005', name: 'Omeprazole 20mg' },
-        ];
-        await this.products.bulkAdd(products);
-
-        const future = new Date();
-        future.setFullYear(future.getFullYear() + 1);
-        await this.batches.bulkAdd(products.map((p, idx) => ({
-            id: `B${idx}`,
-            product_id: p.id,
-            warehouse_id: 'W1',
-            batch_number: `BATCH-${100+idx}`,
-            selling_price: 10 + idx * 5,
-            purchase_price: 5 + idx * 2,
-            quantity: 1000,
-            expiry_date: future.toISOString(),
-            status: BatchStatus.ACTIVE
-        })));
-
         await this.settings.add({ ...DEFAULT_SETTINGS, id: 'config' });
     }
 
@@ -140,11 +117,14 @@ class MizanDatabase extends Dexie {
     async updateSettings(s: SystemSettings) {
         await this.settings.put({ ...s, id: 'config' });
         await this.logActivity('UPDATE', 'STOCK', 'Updated system settings');
+        // We generally don't sync local UI settings like printer paper size to cloud DB in this simple version
+        // unless you want to persist company info.
+        await this.addToQueue('UPDATE_SETTINGS', s); 
     }
 
     async logActivity(action: ActivityLog['action'], entity: ActivityLog['entity'], details: string) {
         const user = authService.getCurrentUser();
-        await this.activityLogs.add({
+        const log: ActivityLog = {
             id: crypto.randomUUID(),
             userId: user?.id || 'SYSTEM',
             userName: user?.name || 'System',
@@ -152,7 +132,10 @@ class MizanDatabase extends Dexie {
             entity,
             details,
             timestamp: new Date().toISOString()
-        });
+        };
+        await this.activityLogs.add(log);
+        // Logs are usually high volume, optional to sync, but good for audit
+        // await this.addToQueue('CREATE_LOG', log);
     }
 
     async getProductsWithBatches(): Promise<ProductWithBatches[]> {
@@ -233,7 +216,9 @@ class MizanDatabase extends Dexie {
                 });
             }
 
+            // TRIGGER SYNC
             await this.addToQueue('CREATE_INVOICE', invoice);
+            
             return { success: true, message: 'Saved successfully', id };
         }).catch((e: any) => ({ success: false, message: e.message }));
     }
@@ -262,12 +247,16 @@ class MizanDatabase extends Dexie {
                             selling_price: item.selling_price
                         });
                     } else {
-                        await this.batches.add({
+                        // New Batch
+                        const newBatch = {
                             id: crypto.randomUUID(), product_id: item.product_id, warehouse_id: item.warehouse_id,
                             batch_number: item.batch_number, quantity: item.quantity,
                             purchase_price: item.cost_price, selling_price: item.selling_price,
                             expiry_date: item.expiry_date, status: BatchStatus.ACTIVE
-                        });
+                        };
+                        await this.batches.add(newBatch);
+                        // TRIGGER SYNC for new batch creation
+                        await this.addToQueue('CREATE_BATCH', newBatch);
                     }
                 }
             }
@@ -289,10 +278,15 @@ class MizanDatabase extends Dexie {
                 });
             }
 
-            await this.purchaseInvoices.add({
+            const invoice = {
                 id, invoice_number, supplier_id: supplierId, date: new Date().toISOString(),
                 total_amount: totalAmount, paid_amount: paidAmount, type: isReturn ? 'RETURN' : 'PURCHASE', items
-            });
+            };
+            
+            await this.purchaseInvoices.add(invoice);
+            
+            // TRIGGER SYNC
+            await this.addToQueue('CREATE_PURCHASE', invoice);
 
             return { success: true, message: 'Saved successfully' };
         }).catch((e: any) => ({ success: false, message: e.message }));
@@ -305,6 +299,10 @@ class MizanDatabase extends Dexie {
             const newQty = batch.quantity + adjustmentQty;
             if (newQty < 0) throw new Error("Stock cannot be negative");
             await this.batches.update(batchId, { quantity: newQty });
+            
+            // Sync Adjustment
+            await this.addToQueue('ADJUST_STOCK', { batchId, quantity: newQty });
+            
             await this.logActivity('ADJUSTMENT', 'STOCK', `Batch ${batch.batch_number}: ${adjustmentQty > 0 ? '+' : ''}${adjustmentQty}. ${reason}`);
             return { success: true, message: 'Stock adjusted' };
         }).catch((e: any) => ({ success: false, message: e.message }));
@@ -317,22 +315,30 @@ class MizanDatabase extends Dexie {
             if (sourceBatch.quantity < quantity) throw new Error("Insufficient Quantity");
 
             await this.batches.update(batchId, { quantity: sourceBatch.quantity - quantity });
+            // Sync Source
+            await this.addToQueue('ADJUST_STOCK', { batchId, quantity: sourceBatch.quantity - quantity });
+
             // Check if exact batch exists in target
             const targetBatch = await this.batches.where({ product_id: sourceBatch.product_id, warehouse_id: targetWarehouseId, batch_number: sourceBatch.batch_number }).first();
             
             if (targetBatch) {
                 await this.batches.update(targetBatch.id, { quantity: targetBatch.quantity + quantity });
+                // Sync Target Update
+                await this.addToQueue('ADJUST_STOCK', { batchId: targetBatch.id, quantity: targetBatch.quantity + quantity });
             } else {
-                await this.batches.add({
+                const newBatch = {
                     ...sourceBatch, id: crypto.randomUUID(), warehouse_id: targetWarehouseId, quantity: quantity
-                });
+                };
+                await this.batches.add(newBatch);
+                // Sync New Target Batch
+                await this.addToQueue('CREATE_BATCH', newBatch);
             }
             return { success: true, message: 'Transfer Successful' };
         }).catch((e: any) => ({ success: false, message: e.message }));
     }
 
     async addDeal(d: Partial<Deal>, initialAmount: number) {
-        return (this as any).transaction('rw', [this.deals, this.cashTransactions, this.activityLogs], async () => {
+        return (this as any).transaction('rw', [this.deals, this.cashTransactions, this.activityLogs, this.queue], async () => {
              const id = crypto.randomUUID();
              const cycle: DealCycle = {
                  id: crypto.randomUUID(),
@@ -340,7 +346,6 @@ class MizanDatabase extends Dexie {
                  amount: initialAmount,
                  productTargets: (d as any).productTargets || []
              };
-             
              delete (d as any).productTargets;
 
              const deal: Deal = {
@@ -351,6 +356,7 @@ class MizanDatabase extends Dexie {
              };
 
              await this.deals.add(deal);
+             await this.addToQueue('CREATE_DEAL', deal);
 
              if (initialAmount > 0) {
                  await this.addCashTransactionInternal({
@@ -367,7 +373,7 @@ class MizanDatabase extends Dexie {
     }
     
     async updateDeal(id: string, updates: any) {
-        return (this as any).transaction('rw', [this.deals, this.activityLogs], async () => {
+        return (this as any).transaction('rw', [this.deals, this.activityLogs, this.queue], async () => {
             const deal = await this.deals.get(id);
             if (!deal) throw new Error("Deal not found");
             
@@ -380,11 +386,15 @@ class MizanDatabase extends Dexie {
                 delete updates.productTargets;
             }
             await this.deals.update(id, updates);
+            
+            // Fetch updated for sync
+            const updatedDeal = await this.deals.get(id);
+            await this.addToQueue('UPDATE_DEAL', updatedDeal);
         });
     }
 
     async renewDeal(id: string, amount: number, targets: DealTarget[]) {
-        return (this as any).transaction('rw', [this.deals, this.cashTransactions, this.activityLogs], async () => {
+        return (this as any).transaction('rw', [this.deals, this.cashTransactions, this.activityLogs, this.queue], async () => {
             const deal = await this.deals.get(id);
             if (!deal) throw new Error("Deal not found");
 
@@ -394,6 +404,10 @@ class MizanDatabase extends Dexie {
             };
             const cycles = [newCycle, ...(deal.cycles || [])];
             await this.deals.update(id, { cycles });
+            
+            // Sync
+            const updatedDeal = await this.deals.get(id);
+            await this.addToQueue('UPDATE_DEAL', updatedDeal);
 
             if (amount > 0) {
                 await this.addCashTransactionInternal({
@@ -411,40 +425,60 @@ class MizanDatabase extends Dexie {
 
     async addCustomer(c: Partial<Customer>) {
         const id = crypto.randomUUID();
-        await this.customers.add({ ...c, id, current_balance: c.opening_balance || 0 } as Customer);
+        const customer = { ...c, id, current_balance: c.opening_balance || 0 } as Customer;
+        await this.customers.add(customer);
+        await this.addToQueue('CREATE_CUSTOMER', customer);
     }
 
     async updateCustomer(id: string, updates: Partial<Customer>) {
-        await (this as any).transaction('rw', this.customers, async () => {
+        await (this as any).transaction('rw', [this.customers, this.queue], async () => {
             const c = await this.customers.get(id);
             if(c && updates.opening_balance !== undefined && updates.opening_balance !== c.opening_balance) {
                 const diff = updates.opening_balance - c.opening_balance;
                 updates.current_balance = c.current_balance + diff;
             }
             await this.customers.update(id, updates);
+            
+            const updated = await this.customers.get(id);
+            await this.addToQueue('UPDATE_CUSTOMER', updated);
         });
     }
 
     async deleteCustomer(id: string) { await this.customers.delete(id); }
-    async addSupplier(s: any) { await this.suppliers.add({ ...s, id: crypto.randomUUID(), current_balance: s.opening_balance || 0 }); }
+    
+    async addSupplier(s: any) { 
+        const id = crypto.randomUUID();
+        const supplier = { ...s, id, current_balance: s.opening_balance || 0 };
+        await this.suppliers.add(supplier);
+        await this.addToQueue('CREATE_SUPPLIER', supplier);
+    }
     
     async addProduct(p: any, b: any) {
-        return (this as any).transaction('rw', [this.products, this.batches], async () => {
+        return (this as any).transaction('rw', [this.products, this.batches, this.queue], async () => {
             const pid = crypto.randomUUID();
-            await this.products.add({ ...p, id: pid });
-            await this.batches.add({ ...b, id: crypto.randomUUID(), product_id: pid, warehouse_id: 'W1', status: BatchStatus.ACTIVE });
+            const product = { ...p, id: pid };
+            const batch = { ...b, id: crypto.randomUUID(), product_id: pid, warehouse_id: 'W1', status: BatchStatus.ACTIVE };
+            
+            await this.products.add(product);
+            await this.batches.add(batch);
+            
+            // Sync both
+            await this.addToQueue('CREATE_PRODUCT', product);
+            await this.addToQueue('CREATE_BATCH', batch);
         });
     }
 
     async addCashTransaction(tx: Omit<CashTransaction, 'id'>) {
-        await (this as any).transaction('rw', [this.cashTransactions, this.customers, this.suppliers], async () => {
+        await (this as any).transaction('rw', [this.cashTransactions, this.customers, this.suppliers, this.queue], async () => {
             await this.addCashTransactionInternal(tx);
         });
     }
 
     private async addCashTransactionInternal(tx: Omit<CashTransaction, 'id'>) {
         const id = await this.generateSequence('V', 'cashTransactions', 'id');
-        await this.cashTransactions.add({ ...tx, id });
+        const finalTx = { ...tx, id };
+        await this.cashTransactions.add(finalTx);
+        await this.addToQueue('CREATE_CASH_TX', finalTx);
 
         if (tx.reference_id) {
             if (tx.category === 'CUSTOMER_PAYMENT') {
@@ -452,12 +486,16 @@ class MizanDatabase extends Dexie {
                 if (c) {
                     const change = tx.type === 'RECEIPT' ? -tx.amount : tx.amount;
                     await this.customers.update(c.id, { current_balance: c.current_balance + change });
+                    // Sync Balance update
+                    const updatedC = await this.customers.get(c.id);
+                    await this.addToQueue('UPDATE_CUSTOMER', updatedC);
                 }
             } else if (tx.category === 'SUPPLIER_PAYMENT') {
                 const s = await this.suppliers.get(tx.reference_id);
                 if (s) {
                     const change = tx.type === 'EXPENSE' ? -tx.amount : tx.amount;
                     await this.suppliers.update(s.id, { current_balance: s.current_balance + change });
+                    // We assume update supplier logic is similar, though explicit sync might be needed if you added Update Supplier logic
                 }
             }
         }
@@ -489,17 +527,42 @@ class MizanDatabase extends Dexie {
     async resetDatabase() { await (this as any).delete(); window.location.reload(); }
     async deleteInvoice(id: string) { await this.invoices.delete(id); }
     async deletePurchaseInvoice(id: string) { await this.purchaseInvoices.delete(id); }
+    
     async deleteProduct(id: string) { 
-        await (this as any).transaction('rw', [this.products, this.batches], async () => {
+        await (this as any).transaction('rw', [this.products, this.batches, this.queue], async () => {
             await this.products.delete(id);
             await this.batches.where('product_id').equals(id).delete();
+            await this.addToQueue('DELETE_PRODUCT', { id });
         });
     }
-    async addRepresentative(r: any) { await this.representatives.add({...r, id: crypto.randomUUID()}); }
-    async updateRepresentative(id: string, r: any) { await this.representatives.update(id, r); }
-    async addWarehouse(name: string) { await this.warehouses.add({ id: crypto.randomUUID(), name, is_default: false }); }
+    
+    async addRepresentative(r: any) { 
+        const id = crypto.randomUUID();
+        const rep = {...r, id};
+        await this.representatives.add(rep); 
+        await this.addToQueue('CREATE_REP', rep);
+    }
+    
+    async updateRepresentative(id: string, r: any) { 
+        await this.representatives.update(id, r); 
+        const updated = await this.representatives.get(id);
+        await this.addToQueue('UPDATE_REP', updated);
+    }
+    
+    async addWarehouse(name: string) { 
+        const id = crypto.randomUUID();
+        const w = { id, name, is_default: false };
+        await this.warehouses.add(w); 
+        await this.addToQueue('CREATE_WAREHOUSE', w);
+    }
+    
     async updateWarehouse(id: string, name: string) { await this.warehouses.update(id, { name }); }
-    async updateProduct(id: string, p: any) { await this.products.update(id, p); }
+    
+    async updateProduct(id: string, p: any) { 
+        await this.products.update(id, p); 
+        const updated = await this.products.get(id);
+        await this.addToQueue('UPDATE_PRODUCT', updated);
+    }
     
     async exportDatabase() {
         const allData: any = {};

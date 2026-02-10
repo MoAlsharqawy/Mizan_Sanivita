@@ -9,19 +9,16 @@ class SyncService {
     async sync() {
         if (this.isSyncing || !isSupabaseConfigured() || !navigator.onLine) return;
         
-        // 1. Authenticate
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.user) {
-            console.log('Sync aborted: User not logged in');
             return;
         }
-        const userId = session.user.id; // This IS the company_id
+        const userId = session.user.id; 
 
         this.isSyncing = true;
-        console.log(`🚀 Starting Sync for User: ${userId}`);
-
+        
         try {
-            const pendingItems = await db.queue.where('status').equals('PENDING').limit(20).toArray();
+            const pendingItems = await db.queue.where('status').equals('PENDING').limit(50).toArray();
             
             for (const item of pendingItems) {
                 await this.processItem(item, userId);
@@ -37,54 +34,165 @@ class SyncService {
     private async processItem(item: QueueItem, userId: string) {
         try {
             let error: any = null;
+            const payload = item.payload;
 
-            if (item.action_type === 'CREATE_INVOICE') {
-                // Prepare Payload - Strip extraneous fields
-                const inv = item.payload;
-                
-                // 1. Sync Customer First (Ensure FK exists)
-                const customer = await db.customers.get(inv.customer_id);
-                if (customer) {
-                    const { error: cErr } = await supabase.from('customers').upsert({
-                        id: customer.id,
-                        company_id: userId,
-                        name: customer.name,
-                        phone: customer.phone,
-                        current_balance: customer.current_balance,
-                        updated_at: new Date().toISOString()
-                    });
-                    if (cErr) error = cErr; // Capture customer error if any
+            // --- PRODUCTS ---
+            if (item.action_type === 'CREATE_PRODUCT' || item.action_type === 'UPDATE_PRODUCT') {
+                const { error: err } = await supabase.from('products').upsert({
+                    id: payload.id,
+                    company_id: userId,
+                    code: payload.code,
+                    name: payload.name,
+                    updated_at: new Date().toISOString()
+                });
+                error = err;
+            }
+            
+            // --- BATCHES ---
+            else if (item.action_type === 'CREATE_BATCH' || item.action_type === 'ADJUST_STOCK') {
+                // ADJUST_STOCK payload might be { batchId, quantity }. If so, fetch full batch from DB first.
+                let batchData = payload;
+                if (item.action_type === 'ADJUST_STOCK') {
+                    const localBatch = await db.batches.get(payload.batchId);
+                    if(localBatch) batchData = localBatch;
+                    else return; // Batch missing? Skip
                 }
 
-                // 2. Sync Invoice (Only if customer didn't fail hard)
-                if (!error) {
-                    const { error: invErr } = await supabase.from('invoices').upsert({
-                        id: inv.id,
-                        company_id: userId,
-                        invoice_number: inv.invoice_number,
-                        customer_id: inv.customer_id,
-                        date: inv.date,
-                        total_before_discount: inv.total_before_discount,
-                        total_discount: inv.total_discount,
-                        net_total: inv.net_total,
-                        payment_status: inv.payment_status,
-                        type: inv.type,
-                        updated_at: new Date().toISOString()
-                    });
-                    if (invErr) error = invErr;
-                }
+                const { error: err } = await supabase.from('batches').upsert({
+                    id: batchData.id,
+                    company_id: userId,
+                    product_id: batchData.product_id,
+                    warehouse_id: batchData.warehouse_id,
+                    batch_number: batchData.batch_number,
+                    quantity: batchData.quantity,
+                    purchase_price: batchData.purchase_price,
+                    selling_price: batchData.selling_price,
+                    expiry_date: batchData.expiry_date,
+                    status: batchData.status,
+                    updated_at: new Date().toISOString()
+                });
+                error = err;
+            }
 
-                // 3. Sync Items
-                if (!error && inv.items && inv.items.length > 0) {
-                    const itemsPayload = inv.items.map((LineItem: any) => ({
-                        id: crypto.randomUUID(),
+            // --- CUSTOMERS ---
+            else if (item.action_type === 'CREATE_CUSTOMER' || item.action_type === 'UPDATE_CUSTOMER') {
+                const { error: err } = await supabase.from('customers').upsert({
+                    id: payload.id,
+                    company_id: userId,
+                    code: payload.code,
+                    name: payload.name,
+                    phone: payload.phone,
+                    address: payload.address,
+                    area: payload.area,
+                    representative_code: payload.representative_code,
+                    current_balance: payload.current_balance,
+                    updated_at: new Date().toISOString()
+                });
+                error = err;
+            }
+
+            // --- SUPPLIERS ---
+            else if (item.action_type === 'CREATE_SUPPLIER') {
+                const { error: err } = await supabase.from('suppliers').upsert({
+                    id: payload.id,
+                    company_id: userId,
+                    code: payload.code,
+                    name: payload.name,
+                    phone: payload.phone,
+                    contact_person: payload.contact_person,
+                    current_balance: payload.current_balance,
+                    updated_at: new Date().toISOString()
+                });
+                error = err;
+            }
+
+            // --- REPRESENTATIVES ---
+            else if (item.action_type === 'CREATE_REP' || item.action_type === 'UPDATE_REP') {
+                const { error: err } = await supabase.from('representatives').upsert({
+                    id: payload.id,
+                    company_id: userId,
+                    code: payload.code,
+                    name: payload.name,
+                    phone: payload.phone,
+                    updated_at: new Date().toISOString()
+                });
+                error = err;
+            }
+
+            // --- WAREHOUSES ---
+            else if (item.action_type === 'CREATE_WAREHOUSE') {
+                const { error: err } = await supabase.from('warehouses').upsert({
+                    id: payload.id,
+                    company_id: userId,
+                    name: payload.name,
+                    is_default: payload.is_default,
+                    updated_at: new Date().toISOString()
+                });
+                error = err;
+            }
+
+            // --- CASH TRANSACTIONS ---
+            else if (item.action_type === 'CREATE_CASH_TX') {
+                const { error: err } = await supabase.from('cash_transactions').upsert({
+                    id: payload.id,
+                    company_id: userId,
+                    type: payload.type,
+                    category: payload.category,
+                    amount: payload.amount,
+                    reference_id: payload.reference_id,
+                    related_name: payload.related_name,
+                    date: payload.date,
+                    notes: payload.notes,
+                    updated_at: new Date().toISOString()
+                });
+                error = err;
+            }
+
+            // --- DEALS ---
+            else if (item.action_type === 'CREATE_DEAL' || item.action_type === 'UPDATE_DEAL') {
+                const { error: err } = await supabase.from('deals').upsert({
+                    id: payload.id,
+                    company_id: userId,
+                    doctor_name: payload.doctorName,
+                    representative_code: payload.representativeCode,
+                    customer_ids: payload.customerIds, // Supabase handles array as jsonb
+                    cycles: payload.cycles, // Jsonb
+                    created_at: payload.createdAt || new Date().toISOString()
+                });
+                error = err;
+            }
+
+            // --- SALES INVOICES ---
+            else if (item.action_type === 'CREATE_INVOICE') {
+                // 1. Invoice Header
+                const { error: invErr } = await supabase.from('invoices').upsert({
+                    id: payload.id,
+                    company_id: userId,
+                    invoice_number: payload.invoice_number,
+                    customer_id: payload.customer_id,
+                    date: payload.date,
+                    total_before_discount: payload.total_before_discount,
+                    total_discount: payload.total_discount,
+                    net_total: payload.net_total,
+                    payment_status: payload.payment_status,
+                    type: payload.type,
+                    updated_at: new Date().toISOString()
+                });
+                if (invErr) error = invErr;
+
+                // 2. Invoice Items
+                if (!error && payload.items && payload.items.length > 0) {
+                    const itemsPayload = payload.items.map((LineItem: any) => ({
+                        id: crypto.randomUUID(), // New ID for item row
                         company_id: userId,
-                        invoice_id: inv.id,
+                        invoice_id: payload.id,
                         product_id: LineItem.product.id,
                         batch_id: LineItem.batch.id,
                         quantity: LineItem.quantity,
+                        bonus_quantity: LineItem.bonus_quantity || 0,
                         unit_price: LineItem.unit_price || 0,
-                        line_total: 0
+                        discount_percentage: LineItem.discount_percentage || 0,
+                        line_total: 0 // Calculated on DB or view
                     }));
                     
                     const { error: itemsErr } = await supabase.from('invoice_items').insert(itemsPayload);
@@ -92,28 +200,46 @@ class SyncService {
                 }
             } 
             
-            else if (item.action_type === 'UPDATE_CUSTOMER') {
-                const { error: custErr } = await supabase.from('customers').upsert({
-                    id: item.payload.id,
+            // --- PURCHASE INVOICES ---
+            else if (item.action_type === 'CREATE_PURCHASE') {
+                const { error: err } = await supabase.from('purchase_invoices').upsert({
+                    id: payload.id,
                     company_id: userId,
-                    name: item.payload.name,
-                    phone: item.payload.phone,
-                    current_balance: item.payload.current_balance,
+                    invoice_number: payload.invoice_number,
+                    supplier_id: payload.supplier_id,
+                    date: payload.date,
+                    total_amount: payload.total_amount,
+                    paid_amount: payload.paid_amount,
+                    type: payload.type,
+                    items: payload.items, // JSONB
                     updated_at: new Date().toISOString()
                 });
-                error = custErr;
+                error = err;
             }
 
+            else if (item.action_type === 'UPDATE_SETTINGS') {
+                const { error: err } = await supabase.from('settings').upsert({
+                    company_id: userId,
+                    company_name: payload.companyName,
+                    company_address: payload.companyAddress,
+                    company_phone: payload.companyPhone,
+                    tax_number: payload.companyTaxNumber,
+                    currency: payload.currency,
+                    logo_url: payload.companyLogo,
+                    invoice_template: payload.invoiceTemplate,
+                    updated_at: new Date().toISOString()
+                });
+                error = err;
+            }
+
+            // --- ERROR HANDLING ---
             if (error) {
-                console.error(`Supabase Refused Item ${item.id}:`, error);
+                console.error(`Sync Failed for ${item.action_type}:`, error);
                 
-                // --- INTELLIGENT ERROR DETECTION ---
-                // 42P01: undefined_table (Tables don't exist yet)
-                // 42501: insufficient_privilege (RLS Policy blocking write)
-                if (error.code === '42P01') {
+                if (error.code === '42P01') { // Missing Tables
                     localStorage.setItem('SYS_HEALTH', 'MISSING_TABLES');
                     window.dispatchEvent(new Event('sys-health-change'));
-                } else if (error.code === '42501') {
+                } else if (error.code === '42501') { // RLS / Permission
                     localStorage.setItem('SYS_HEALTH', 'PERMISSION_DENIED');
                     window.dispatchEvent(new Event('sys-health-change'));
                 }
@@ -124,8 +250,7 @@ class SyncService {
                     retries: (item.retries || 0) + 1 
                 });
             } else {
-                console.log(`✅ Item ${item.id} Synced!`);
-                // Clear health warning if successful
+                console.log(`✅ Synced: ${item.action_type}`);
                 if (localStorage.getItem('SYS_HEALTH')) {
                     localStorage.removeItem('SYS_HEALTH');
                     window.dispatchEvent(new Event('sys-health-change'));
@@ -140,5 +265,7 @@ class SyncService {
 }
 
 export const syncService = new SyncService();
-setInterval(() => syncService.sync(), 5000);
+// Aggressive sync for testing
+setInterval(() => syncService.sync(), 3000); 
 window.addEventListener('online', () => syncService.sync());
+window.addEventListener('focus', () => syncService.sync());
