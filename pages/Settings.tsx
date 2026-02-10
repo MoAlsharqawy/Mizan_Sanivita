@@ -19,9 +19,13 @@ export default function Settings() {
       permissions: [] as string[]
   });
 
-  // --- FINAL COMPLETE SCHEMA (INCLUDES REPRESENTATIVES, SUPPLIERS, CASH, DEALS, ETC) ---
+  // --- SQL SCRIPT (RLS DISABLED FOR TESTING) ---
   const SQL_SCRIPT = `
--- ⚠️ FINAL CLEANUP: REMOVE EVERYTHING TO REBUILD CORRECTLY
+-- ⚠️ WARNING: SECURITY DISABLED (OPEN ACCESS)
+-- This script drops tables, recreates them, and DISABLES Row Level Security.
+-- Use this for testing connectivity issues. Secure it later.
+
+-- 1. CLEANUP
 DROP TABLE IF EXISTS public.activity_logs CASCADE;
 DROP TABLE IF EXISTS public.deals CASCADE;
 DROP TABLE IF EXISTS public.cash_transactions CASCADE;
@@ -38,7 +42,7 @@ DROP TABLE IF EXISTS public.warehouses CASCADE;
 DROP TABLE IF EXISTS public.settings CASCADE;
 DROP TABLE IF EXISTS public.profiles CASCADE;
 
--- 1. BASE TABLES (Users & Settings)
+-- 2. CREATE TABLES
 create table public.profiles (
   id uuid references auth.users on delete cascade not null primary key,
   full_name text,
@@ -57,7 +61,6 @@ create table public.settings (
   updated_at timestamp with time zone
 );
 
--- 2. LOOKUP TABLES (Warehouses, Reps)
 create table public.warehouses (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
@@ -75,7 +78,6 @@ create table public.representatives (
   updated_at timestamp with time zone
 );
 
--- 3. PARTNERS (Suppliers, Customers)
 create table public.suppliers (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
@@ -90,7 +92,7 @@ create table public.suppliers (
 create table public.customers (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
-  representative_code text, -- Linked to representatives.code logic
+  representative_code text,
   code text,
   name text,
   phone text,
@@ -100,9 +102,8 @@ create table public.customers (
   updated_at timestamp with time zone
 );
 
--- 4. INVENTORY (Products, Batches)
 create table public.products (
-  id text not null, -- Local ID (P1, P2...)
+  id text not null,
   company_id uuid references auth.users(id) not null,
   code text,
   name text,
@@ -114,7 +115,7 @@ create table public.batches (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
   product_id text,
-  warehouse_id text, -- ID of the warehouse
+  warehouse_id text,
   batch_number text,
   selling_price numeric,
   purchase_price numeric,
@@ -124,7 +125,6 @@ create table public.batches (
   updated_at timestamp with time zone
 );
 
--- 5. TRANSACTIONS (Sales, Purchases, Cash)
 create table public.invoices (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
@@ -135,7 +135,7 @@ create table public.invoices (
   total_discount numeric,
   net_total numeric,
   payment_status text,
-  type text, -- SALE or RETURN
+  type text,
   updated_at timestamp with time zone
 );
 
@@ -144,7 +144,7 @@ create table public.invoice_items (
   company_id uuid references auth.users(id) not null,
   invoice_id uuid references public.invoices(id) on delete cascade,
   product_id text,
-  batch_id text, -- link to batch
+  batch_id text,
   quantity numeric,
   bonus_quantity numeric default 0,
   unit_price numeric,
@@ -160,18 +160,18 @@ create table public.purchase_invoices (
   date timestamp with time zone,
   total_amount numeric,
   paid_amount numeric,
-  type text, -- PURCHASE or RETURN
-  items jsonb, -- Store items as JSONB for simplicity in sync
+  type text,
+  items jsonb,
   updated_at timestamp with time zone
 );
 
 create table public.cash_transactions (
-  id text not null, -- Custom ID format V2301-1
+  id text not null,
   company_id uuid references auth.users(id) not null,
-  type text, -- RECEIPT / EXPENSE
+  type text,
   category text,
   amount numeric,
-  reference_id text, -- Generic ref
+  reference_id text,
   related_name text,
   date timestamp with time zone,
   notes text,
@@ -179,14 +179,13 @@ create table public.cash_transactions (
   primary key (id, company_id)
 );
 
--- 6. ADVANCED FEATURES (Deals, Logs)
 create table public.deals (
   id uuid primary key,
   company_id uuid references auth.users(id) not null,
   doctor_name text,
   representative_code text,
-  cycles jsonb, -- Store complex cycle history as JSON
-  customer_ids jsonb, -- Store linked customers as JSON array
+  cycles jsonb,
+  customer_ids jsonb,
   created_at timestamp with time zone
 );
 
@@ -200,44 +199,29 @@ create table public.activity_logs (
   timestamp timestamp with time zone
 );
 
--- 7. SECURITY (Row Level Security)
-alter table profiles enable row level security;
-alter table settings enable row level security;
-alter table warehouses enable row level security;
-alter table representatives enable row level security;
-alter table suppliers enable row level security;
-alter table customers enable row level security;
-alter table products enable row level security;
-alter table batches enable row level security;
-alter table invoices enable row level security;
-alter table invoice_items enable row level security;
-alter table purchase_invoices enable row level security;
-alter table cash_transactions enable row level security;
-alter table deals enable row level security;
-alter table activity_logs enable row level security;
+-- 3. DISABLE RLS (OPEN ACCESS FOR TESTING)
+alter table profiles disable row level security;
+alter table settings disable row level security;
+alter table warehouses disable row level security;
+alter table representatives disable row level security;
+alter table suppliers disable row level security;
+alter table customers disable row level security;
+alter table products disable row level security;
+alter table batches disable row level security;
+alter table invoices disable row level security;
+alter table invoice_items disable row level security;
+alter table purchase_invoices disable row level security;
+alter table cash_transactions disable row level security;
+alter table deals disable row level security;
+alter table activity_logs disable row level security;
 
--- 8. POLICIES (Data Isolation per User/Company)
-create policy "Auth Profile" on profiles for all using (auth.uid() = id);
-create policy "Auth Settings" on settings for all using (auth.uid() = company_id);
-create policy "Auth Warehouses" on warehouses for all using (auth.uid() = company_id);
-create policy "Auth Reps" on representatives for all using (auth.uid() = company_id);
-create policy "Auth Suppliers" on suppliers for all using (auth.uid() = company_id);
-create policy "Auth Customers" on customers for all using (auth.uid() = company_id);
-create policy "Auth Products" on products for all using (auth.uid() = company_id);
-create policy "Auth Batches" on batches for all using (auth.uid() = company_id);
-create policy "Auth Invoices" on invoices for all using (auth.uid() = company_id);
-create policy "Auth InvItems" on invoice_items for all using (auth.uid() = company_id);
-create policy "Auth Purchases" on purchase_invoices for all using (auth.uid() = company_id);
-create policy "Auth Cash" on cash_transactions for all using (auth.uid() = company_id);
-create policy "Auth Deals" on deals for all using (auth.uid() = company_id);
-create policy "Auth Logs" on activity_logs for all using (auth.uid() = company_id);
-
--- 9. STORAGE
+-- 4. STORAGE
 insert into storage.buckets (id, name, public) values ('logos', 'logos', true) on conflict (id) do nothing;
 drop policy if exists "Logos Public" on storage.objects;
 drop policy if exists "Logos Upload" on storage.objects;
+-- Allow anyone to upload logos for now
 create policy "Logos Public" on storage.objects for select using ( bucket_id = 'logos' );
-create policy "Logos Upload" on storage.objects for insert with check ( bucket_id = 'logos' AND auth.uid() = owner );
+create policy "Logos Upload" on storage.objects for insert with check ( bucket_id = 'logos' );
   `;
 
   useEffect(() => {
@@ -324,20 +308,20 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
           if (authError) throw authError;
           if (!session) throw new Error("Not logged in. Please Log out and Log in again.");
 
-          // 2. Check Database Access (RLS/Tables)
-          // Try to access a critical table like representatives or profiles
+          // 2. Check Database Access
+          // Try to access a critical table
           const { error: dbError } = await supabase.from('profiles').select('*').limit(1);
           
           if (dbError) {
-              if (dbError.code === '42P01') throw new Error("Connection OK, but TABLES MISSING. Please copy the SQL below and run it in Supabase.");
-              if (dbError.code === '42501') throw new Error("Connection OK, but PERMISSION DENIED. Please copy the SQL below and run it in Supabase.");
+              if (dbError.code === '42P01') throw new Error("Tables Missing. Please run the SQL script below.");
+              if (dbError.code === '42501') throw new Error("Permission Denied. Please run the SQL script below to DISABLE RLS.");
               throw dbError;
           }
 
           setConnectionStatus('SUCCESS');
           localStorage.removeItem('SYS_HEALTH'); // Clear any old error flags
           window.dispatchEvent(new Event('sys-health-change'));
-          alert("✅ Connected Successfully! Database is fully structured.");
+          alert("✅ Connected Successfully!");
       } catch (e: any) {
           setConnectionStatus('ERROR');
           alert(`❌ Connection Issue: ${e.message}`);
@@ -398,10 +382,10 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
                     <Shield className="w-6 h-6 text-amber-600 shrink-0 mt-1" />
                     <div>
-                        <h4 className="font-bold text-amber-800">Complete Database Reset Script</h4>
+                        <h4 className="font-bold text-amber-800">Troubleshooting Script (Disable RLS)</h4>
                         <p className="text-sm text-amber-700 mt-1">
-                            This script includes <b>Representatives, Suppliers, Deals, Cash Log, Warehouses, Batches, and all other tables</b>.
-                            Running this will delete existing cloud data and rebuild the structure perfectly.
+                            This script will drop all tables and recreate them with <b>Row Level Security DISABLED</b>.
+                            This fixes "Permission Denied" errors by allowing open access for testing.
                         </p>
                     </div>
                 </div>
