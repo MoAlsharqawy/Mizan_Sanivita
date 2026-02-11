@@ -2,16 +2,13 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/auth';
-import { configureSupabase, isSupabaseConfigured, clearSupabaseConfig } from '../services/supabase';
-import { Lock, User, ArrowRight, Loader2, ShieldCheck, Phone, Building2, Settings, Database, Save, X, AlertTriangle } from 'lucide-react';
+import { isSupabaseConfigured, configureSupabase, clearSupabaseConfig } from '../services/supabase';
+import { Lock, User, ArrowRight, Loader2, Settings, Database, Save, X, AlertTriangle } from 'lucide-react';
 
 export default function Login() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [companyName, setCompanyName] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -20,10 +17,8 @@ export default function Login() {
   const [configUrl, setConfigUrl] = useState('');
   const [configKey, setConfigKey] = useState('');
 
-  // Check configuration on mount
   useEffect(() => {
       if (!isSupabaseConfigured()) {
-          // If not configured via env vars, force open the manual config
           setShowConfig(true);
           setError("Connection missing. Please configure Supabase details.");
       }
@@ -35,25 +30,17 @@ export default function Login() {
     setError('');
 
     try {
-      if (isSignUp) {
-          await authService.signup(email, password, companyName || 'My Business');
-          // Auto login after signup
-          await authService.login(email, password);
-      } else {
-          await authService.login(email, password);
-      }
+      await authService.login(email, password);
       navigate('/');
     } catch (err: any) {
       console.error(err);
       const msg = err.message || '';
       
       if (msg.includes("Supabase not configured")) {
-          setError("System error: Database connection not set.");
+          setError("Database connection not set.");
           setShowConfig(true);
-      } else if (msg.includes("violates row-level security") || msg.includes("permission denied")) {
-          setError("Database Permission Error: Please run the SQL setup script in Supabase Dashboard to fix RLS policies.");
-      } else if (msg.includes("rate limit") || msg.includes("429")) {
-          setError("Too many attempts. Please create the user manually in Supabase Dashboard -> Authentication -> Users, then come back here and Sign In.");
+      } else if (msg.includes("Invalid login")) {
+          setError("Invalid email or password.");
       } else {
           setError(msg || 'Authentication failed');
       }
@@ -80,7 +67,7 @@ export default function Login() {
           <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-600 rounded-full mix-blend-overlay filter blur-[120px] opacity-20 animate-pulse" style={{animationDelay: '2s'}}></div>
       </div>
 
-      {/* Config Button (Top Right) */}
+      {/* Config Button */}
       <div className="absolute top-4 right-4 z-50">
           <button 
             onClick={() => setShowConfig(true)}
@@ -98,8 +85,8 @@ export default function Login() {
             <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
                 <span className="text-3xl font-bold text-white">M</span>
             </div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">{isSignUp ? 'Create Account' : 'Welcome Back'}</h1>
-            <p className="text-slate-400 text-sm mt-2">{isSignUp ? 'Start your business journey' : 'Sign in to sync your data'}</p>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Mizan Online</h1>
+            <p className="text-slate-400 text-sm mt-2">Employee Login</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -113,7 +100,7 @@ export default function Login() {
                   type="email"
                   required
                   className="w-full pl-11 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                  placeholder="name@company.com"
+                  placeholder="user@company.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
@@ -137,25 +124,6 @@ export default function Login() {
               </div>
             </div>
 
-            {isSignUp && (
-                <div className="animate-in fade-in slide-in-from-top-2">
-                    <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5 ml-1">Company Name</label>
-                    <div className="relative group">
-                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                        <Building2 className="h-5 w-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                        </div>
-                        <input
-                        type="text"
-                        required
-                        className="w-full pl-11 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                        placeholder="My Business LLC"
-                        value={companyName}
-                        onChange={(e) => setCompanyName(e.target.value)}
-                        />
-                    </div>
-                </div>
-            )}
-
             {error && (
               <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm text-center flex items-center justify-center gap-2 animate-in fade-in slide-in-from-top-2">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -172,26 +140,11 @@ export default function Login() {
                 <Loader2 className="w-5 h-5 animate-spin" />
               ) : (
                 <>
-                  {isSignUp ? 'Create Account' : 'Sign In'} <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                  Sign In <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </>
               )}
             </button>
           </form>
-
-          <div className="mt-6 text-center">
-             <button 
-                onClick={() => { setIsSignUp(!isSignUp); setError(''); }}
-                className="text-sm text-slate-400 hover:text-white underline transition-colors"
-             >
-                 {isSignUp ? 'Already have an account? Sign In' : 'Need an account? Sign Up'}
-             </button>
-          </div>
-        </div>
-        
-        <div className="text-center text-slate-600 text-xs mt-6 flex flex-col gap-1 items-center">
-            <p className="flex items-center gap-2 justify-center">
-                Powered by <span className="font-bold text-slate-400">Mizan Sales</span> &copy; 2026
-            </p>
         </div>
       </div>
 
@@ -210,7 +163,7 @@ export default function Login() {
                   
                   <div className="p-6 space-y-6">
                       <p className="text-slate-400 text-sm">
-                          Enter your Supabase project credentials. These are stored locally in your browser.
+                          Enter your Supabase project credentials.
                       </p>
                       
                       <form onSubmit={handleSaveConfig} className="space-y-4">
@@ -219,7 +172,6 @@ export default function Login() {
                               <input 
                                   type="text" 
                                   required
-                                  placeholder="https://your-project.supabase.co"
                                   className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none"
                                   value={configUrl}
                                   onChange={e => setConfigUrl(e.target.value)}
@@ -230,7 +182,6 @@ export default function Login() {
                               <input 
                                   type="text" 
                                   required
-                                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI..."
                                   className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none font-mono text-xs"
                                   value={configKey}
                                   onChange={e => setConfigKey(e.target.value)}
@@ -249,7 +200,7 @@ export default function Login() {
                                 type="submit"
                                 className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2"
                               >
-                                  <Save className="w-4 h-4" /> Save & Reload
+                                  <Save className="w-4 h-4" /> Save & Connect
                               </button>
                           </div>
                       </form>

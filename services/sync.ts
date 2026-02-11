@@ -3,17 +3,18 @@ import { db } from './db';
 import { supabase, isSupabaseConfigured } from './supabase';
 import { QueueItem } from '../types';
 
+// Matches the ID in auth.ts
+const SHARED_COMPANY_ID = "00000000-0000-0000-0000-000000000000";
+
 class SyncService {
     private isSyncing = false;
 
     async sync() {
         if (this.isSyncing || !isSupabaseConfigured() || !navigator.onLine) return;
         
+        // Ensure user is logged in
         const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.user) {
-            return;
-        }
-        const userId = session.user.id; 
+        if (!session?.user) return;
 
         this.isSyncing = true;
         
@@ -21,17 +22,18 @@ class SyncService {
             const pendingItems = await db.queue.where('status').equals('PENDING').limit(50).toArray();
             
             for (const item of pendingItems) {
-                await this.processItem(item, userId);
+                // Use SHARED ID for all writes
+                await this.processItem(item, SHARED_COMPANY_ID);
             }
 
         } catch (error) {
-            console.error('❌ CRITICAL SYNC ERROR:', error);
+            console.error('❌ SYNC ERROR:', error);
         } finally {
             this.isSyncing = false;
         }
     }
 
-    private async processItem(item: QueueItem, userId: string) {
+    private async processItem(item: QueueItem, companyId: string) {
         try {
             let error: any = null;
             const payload = item.payload;
@@ -40,7 +42,7 @@ class SyncService {
             if (item.action_type === 'CREATE_PRODUCT' || item.action_type === 'UPDATE_PRODUCT') {
                 const { error: err } = await supabase.from('products').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     code: payload.code,
                     name: payload.name,
                     updated_at: new Date().toISOString()
@@ -50,17 +52,16 @@ class SyncService {
             
             // --- BATCHES ---
             else if (item.action_type === 'CREATE_BATCH' || item.action_type === 'ADJUST_STOCK') {
-                // ADJUST_STOCK payload might be { batchId, quantity }. If so, fetch full batch from DB first.
                 let batchData = payload;
                 if (item.action_type === 'ADJUST_STOCK') {
                     const localBatch = await db.batches.get(payload.batchId);
                     if(localBatch) batchData = localBatch;
-                    else return; // Batch missing? Skip
+                    else return;
                 }
 
                 const { error: err } = await supabase.from('batches').upsert({
                     id: batchData.id,
-                    company_id: userId,
+                    company_id: companyId,
                     product_id: batchData.product_id,
                     warehouse_id: batchData.warehouse_id,
                     batch_number: batchData.batch_number,
@@ -78,7 +79,7 @@ class SyncService {
             else if (item.action_type === 'CREATE_CUSTOMER' || item.action_type === 'UPDATE_CUSTOMER') {
                 const { error: err } = await supabase.from('customers').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     code: payload.code,
                     name: payload.name,
                     phone: payload.phone,
@@ -95,7 +96,7 @@ class SyncService {
             else if (item.action_type === 'CREATE_SUPPLIER') {
                 const { error: err } = await supabase.from('suppliers').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     code: payload.code,
                     name: payload.name,
                     phone: payload.phone,
@@ -110,7 +111,7 @@ class SyncService {
             else if (item.action_type === 'CREATE_REP' || item.action_type === 'UPDATE_REP') {
                 const { error: err } = await supabase.from('representatives').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     code: payload.code,
                     name: payload.name,
                     phone: payload.phone,
@@ -123,7 +124,7 @@ class SyncService {
             else if (item.action_type === 'CREATE_WAREHOUSE') {
                 const { error: err } = await supabase.from('warehouses').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     name: payload.name,
                     is_default: payload.is_default,
                     updated_at: new Date().toISOString()
@@ -135,7 +136,7 @@ class SyncService {
             else if (item.action_type === 'CREATE_CASH_TX') {
                 const { error: err } = await supabase.from('cash_transactions').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     type: payload.type,
                     category: payload.category,
                     amount: payload.amount,
@@ -152,11 +153,11 @@ class SyncService {
             else if (item.action_type === 'CREATE_DEAL' || item.action_type === 'UPDATE_DEAL') {
                 const { error: err } = await supabase.from('deals').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     doctor_name: payload.doctorName,
                     representative_code: payload.representativeCode,
-                    customer_ids: payload.customerIds, // Supabase handles array as jsonb
-                    cycles: payload.cycles, // Jsonb
+                    customer_ids: payload.customerIds,
+                    cycles: payload.cycles,
                     created_at: payload.createdAt || new Date().toISOString()
                 });
                 error = err;
@@ -164,10 +165,9 @@ class SyncService {
 
             // --- SALES INVOICES ---
             else if (item.action_type === 'CREATE_INVOICE') {
-                // 1. Invoice Header
                 const { error: invErr } = await supabase.from('invoices').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     invoice_number: payload.invoice_number,
                     customer_id: payload.customer_id,
                     date: payload.date,
@@ -180,11 +180,10 @@ class SyncService {
                 });
                 if (invErr) error = invErr;
 
-                // 2. Invoice Items
                 if (!error && payload.items && payload.items.length > 0) {
                     const itemsPayload = payload.items.map((LineItem: any) => ({
-                        id: crypto.randomUUID(), // New ID for item row
-                        company_id: userId,
+                        id: crypto.randomUUID(),
+                        company_id: companyId,
                         invoice_id: payload.id,
                         product_id: LineItem.product.id,
                         batch_id: LineItem.batch.id,
@@ -192,7 +191,7 @@ class SyncService {
                         bonus_quantity: LineItem.bonus_quantity || 0,
                         unit_price: LineItem.unit_price || 0,
                         discount_percentage: LineItem.discount_percentage || 0,
-                        line_total: 0 // Calculated on DB or view
+                        line_total: 0
                     }));
                     
                     const { error: itemsErr } = await supabase.from('invoice_items').insert(itemsPayload);
@@ -204,14 +203,14 @@ class SyncService {
             else if (item.action_type === 'CREATE_PURCHASE') {
                 const { error: err } = await supabase.from('purchase_invoices').upsert({
                     id: payload.id,
-                    company_id: userId,
+                    company_id: companyId,
                     invoice_number: payload.invoice_number,
                     supplier_id: payload.supplier_id,
                     date: payload.date,
                     total_amount: payload.total_amount,
                     paid_amount: payload.paid_amount,
                     type: payload.type,
-                    items: payload.items, // JSONB
+                    items: payload.items,
                     updated_at: new Date().toISOString()
                 });
                 error = err;
@@ -219,7 +218,7 @@ class SyncService {
 
             else if (item.action_type === 'UPDATE_SETTINGS') {
                 const { error: err } = await supabase.from('settings').upsert({
-                    company_id: userId,
+                    company_id: companyId,
                     company_name: payload.companyName,
                     company_address: payload.companyAddress,
                     company_phone: payload.companyPhone,
@@ -236,10 +235,10 @@ class SyncService {
             if (error) {
                 console.error(`Sync Failed for ${item.action_type}:`, error);
                 
-                if (error.code === '42P01') { // Missing Tables
+                if (error.code === '42P01') { 
                     localStorage.setItem('SYS_HEALTH', 'MISSING_TABLES');
                     window.dispatchEvent(new Event('sys-health-change'));
-                } else if (error.code === '42501') { // RLS / Permission
+                } else if (error.code === '42501') { 
                     localStorage.setItem('SYS_HEALTH', 'PERMISSION_DENIED');
                     window.dispatchEvent(new Event('sys-health-change'));
                 }

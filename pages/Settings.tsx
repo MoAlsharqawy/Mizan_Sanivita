@@ -8,28 +8,21 @@ import { t } from '../utils/t';
 
 export default function Settings() {
   const [settings, setSettings] = useState<any>({});
-  const [activeTab, setActiveTab] = useState<'general' | 'invoice' | 'users' | 'printer' | 'backup' | 'database'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'invoice' | 'database'>('general');
   const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'CHECKING' | 'SUCCESS' | 'ERROR'>('IDLE');
-  
-  // Users Management State
-  const [users, setUsers] = useState<any[]>([]);
-  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
-  const [userForm, setUserForm] = useState({ 
-      id: '', name: '', username: '', password: '', role: 'USER',
-      permissions: [] as string[]
-  });
 
-  // --- SQL SCRIPT (RLS DISABLED FOR TESTING) ---
+  // --- FINAL PRODUCTION SQL SCRIPT ---
   const SQL_SCRIPT = `
--- ⚠️ WARNING: SECURITY DISABLED (OPEN ACCESS)
--- This script drops tables, recreates them, and DISABLES Row Level Security.
--- Use this for testing connectivity issues. Secure it later.
+-- ⚡ MIZAN ONLINE: SINGLE TENANT SETUP SCRIPT
+-- Run this in Supabase SQL Editor to initialize the system.
 
--- 1. CLEANUP
+-- 1. EXTENSIONS
+create extension if not exists moddatetime schema extensions;
+
+-- 2. CLEANUP (CAUTION: DELETES DATA)
 DROP TABLE IF EXISTS public.activity_logs CASCADE;
 DROP TABLE IF EXISTS public.deals CASCADE;
 DROP TABLE IF EXISTS public.cash_transactions CASCADE;
-DROP TABLE IF EXISTS public.purchase_items CASCADE;
 DROP TABLE IF EXISTS public.purchase_invoices CASCADE;
 DROP TABLE IF EXISTS public.invoice_items CASCADE;
 DROP TABLE IF EXISTS public.invoices CASCADE;
@@ -42,56 +35,50 @@ DROP TABLE IF EXISTS public.warehouses CASCADE;
 DROP TABLE IF EXISTS public.settings CASCADE;
 DROP TABLE IF EXISTS public.profiles CASCADE;
 
--- 2. CREATE TABLES
-create table public.profiles (
-  id uuid references auth.users on delete cascade not null primary key,
-  full_name text,
-  updated_at timestamp with time zone
-);
-
+-- 3. TABLES
 create table public.settings (
-  company_id uuid references auth.users(id) not null primary key,
+  company_id uuid not null primary key,
   company_name text,
   company_address text,
   company_phone text,
   tax_number text,
-  currency text default '$',
+  currency text default 'SAR',
   logo_url text,
   invoice_template text,
-  updated_at timestamp with time zone
+  updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 create table public.warehouses (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   name text,
   is_default boolean default false,
-  updated_at timestamp with time zone
+  updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 create table public.representatives (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   code text,
   name text,
   phone text,
-  updated_at timestamp with time zone
+  updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 create table public.suppliers (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   code text,
   name text,
   phone text,
   contact_person text,
   current_balance numeric default 0,
-  updated_at timestamp with time zone
+  updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 create table public.customers (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   representative_code text,
   code text,
   name text,
@@ -99,21 +86,21 @@ create table public.customers (
   area text,
   address text,
   current_balance numeric default 0,
-  updated_at timestamp with time zone
+  updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 create table public.products (
   id text not null,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   code text,
   name text,
-  updated_at timestamp with time zone,
+  updated_at timestamp with time zone default timezone('utc'::text, now()),
   primary key (id, company_id)
 );
 
 create table public.batches (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   product_id text,
   warehouse_id text,
   batch_number text,
@@ -122,26 +109,26 @@ create table public.batches (
   quantity numeric,
   expiry_date timestamp with time zone,
   status text,
-  updated_at timestamp with time zone
+  updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 create table public.invoices (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   invoice_number text,
-  customer_id uuid references public.customers(id),
+  customer_id uuid, -- loose link to avoid sync constraints
   date timestamp with time zone,
   total_before_discount numeric,
   total_discount numeric,
   net_total numeric,
   payment_status text,
   type text,
-  updated_at timestamp with time zone
+  updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 create table public.invoice_items (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   invoice_id uuid references public.invoices(id) on delete cascade,
   product_id text,
   batch_id text,
@@ -154,20 +141,20 @@ create table public.invoice_items (
 
 create table public.purchase_invoices (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   invoice_number text,
-  supplier_id uuid references public.suppliers(id),
+  supplier_id uuid,
   date timestamp with time zone,
   total_amount numeric,
   paid_amount numeric,
   type text,
   items jsonb,
-  updated_at timestamp with time zone
+  updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 create table public.cash_transactions (
   id text not null,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   type text,
   category text,
   amount numeric,
@@ -175,13 +162,13 @@ create table public.cash_transactions (
   related_name text,
   date timestamp with time zone,
   notes text,
-  updated_at timestamp with time zone,
+  updated_at timestamp with time zone default timezone('utc'::text, now()),
   primary key (id, company_id)
 );
 
 create table public.deals (
   id uuid primary key,
-  company_id uuid references auth.users(id) not null,
+  company_id uuid not null,
   doctor_name text,
   representative_code text,
   cycles jsonb,
@@ -189,78 +176,76 @@ create table public.deals (
   created_at timestamp with time zone
 );
 
-create table public.activity_logs (
-  id uuid primary key,
-  company_id uuid references auth.users(id) not null,
-  user_name text,
-  action text,
-  entity text,
-  details text,
-  timestamp timestamp with time zone
-);
+-- 4. TRIGGERS (Auto-update 'updated_at')
+create trigger handle_updated_at before update on settings
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on warehouses
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on representatives
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on suppliers
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on customers
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on products
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on batches
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on invoices
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on purchase_invoices
+  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on cash_transactions
+  for each row execute procedure moddatetime (updated_at);
 
--- 3. DISABLE RLS (OPEN ACCESS FOR TESTING)
-alter table profiles disable row level security;
-alter table settings disable row level security;
-alter table warehouses disable row level security;
-alter table representatives disable row level security;
-alter table suppliers disable row level security;
-alter table customers disable row level security;
-alter table products disable row level security;
-alter table batches disable row level security;
-alter table invoices disable row level security;
-alter table invoice_items disable row level security;
-alter table purchase_invoices disable row level security;
-alter table cash_transactions disable row level security;
-alter table deals disable row level security;
-alter table activity_logs disable row level security;
+-- 5. RLS POLICIES (OPEN ACCESS FOR LOGGED IN USERS)
+alter table settings enable row level security;
+alter table warehouses enable row level security;
+alter table representatives enable row level security;
+alter table suppliers enable row level security;
+alter table customers enable row level security;
+alter table products enable row level security;
+alter table batches enable row level security;
+alter table invoices enable row level security;
+alter table invoice_items enable row level security;
+alter table purchase_invoices enable row level security;
+alter table cash_transactions enable row level security;
+alter table deals enable row level security;
 
--- 4. STORAGE
+-- Allow read/write for ANY authenticated user (Single Company Mode)
+create policy "Enable access for all users" on settings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on warehouses for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on representatives for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on suppliers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on customers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on products for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on batches for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on invoice_items for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on purchase_invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on cash_transactions for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Enable access for all users" on deals for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- 6. STORAGE
 insert into storage.buckets (id, name, public) values ('logos', 'logos', true) on conflict (id) do nothing;
 drop policy if exists "Logos Public" on storage.objects;
 drop policy if exists "Logos Upload" on storage.objects;
--- Allow anyone to upload logos for now
 create policy "Logos Public" on storage.objects for select using ( bucket_id = 'logos' );
 create policy "Logos Upload" on storage.objects for insert with check ( bucket_id = 'logos' );
   `;
 
   useEffect(() => {
     db.getSettings().then(setSettings);
-    // Auto-open Database tab if there is a sync error
     if (localStorage.getItem('SYS_HEALTH')) {
         setActiveTab('database');
     }
   }, []);
-
-  useEffect(() => {
-    if (activeTab === 'users') {
-        setUsers(authService.getUsers());
-    }
-  }, [activeTab]);
 
   const handleSaveSettings = async () => {
     await db.updateSettings(settings);
     window.location.reload();
   };
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files && e.target.files[0]) {
-          const file = e.target.files[0];
-          const reader = new FileReader();
-          reader.onloadend = () => {
-              setSettings({ ...settings, companyLogo: reader.result as string });
-          };
-          reader.readAsDataURL(file);
-      }
-  };
-
-  // ... (User Management Functions omitted for brevity, logic remains same)
-  const handleOpenUserModal = (user?: any) => { setIsUserModalOpen(true); setUserForm(user || {id:'',name:'',username:'',password:'',role:'USER',permissions:[]}); };
-  const handleSaveUser = () => { authService.saveUser(userForm); setUsers(authService.getUsers()); setIsUserModalOpen(false); };
-  const handleDeleteUser = (id: string) => { authService.deleteUser(id); setUsers(authService.getUsers()); };
-  const togglePermission = (permId: string) => { setUserForm(p => ({...p, permissions: p.permissions.includes(permId) ? p.permissions.filter(x=>x!==permId) : [...p.permissions, permId]})) };
-
-  // BACKUP & RESTORE LOGIC
   const handleBackup = async () => {
       const data = await db.exportDatabase();
       const blob = new Blob([data], { type: 'application/json' });
@@ -293,7 +278,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
 
   const copySQL = () => {
       navigator.clipboard.writeText(SQL_SCRIPT);
-      alert("SQL Code Copied! Now paste it in Supabase SQL Editor.");
+      alert("SQL Copied! Run this in Supabase SQL Editor.");
   };
 
   const handleTestConnection = async () => {
@@ -303,28 +288,25 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
       }
       setConnectionStatus('CHECKING');
       try {
-          // 1. Check Auth/Network
           const { data: { session }, error: authError } = await supabase.auth.getSession();
           if (authError) throw authError;
-          if (!session) throw new Error("Not logged in. Please Log out and Log in again.");
+          if (!session) throw new Error("Not logged in.");
 
-          // 2. Check Database Access
-          // Try to access a critical table
-          const { error: dbError } = await supabase.from('profiles').select('*').limit(1);
+          const { error: dbError } = await supabase.from('settings').select('*').limit(1);
           
           if (dbError) {
-              if (dbError.code === '42P01') throw new Error("Tables Missing. Please run the SQL script below.");
-              if (dbError.code === '42501') throw new Error("Permission Denied. Please run the SQL script below to DISABLE RLS.");
+              if (dbError.code === '42P01') throw new Error("Tables Missing. Run SQL script.");
+              if (dbError.code === '42501') throw new Error("Permission Denied. Run SQL script.");
               throw dbError;
           }
 
           setConnectionStatus('SUCCESS');
-          localStorage.removeItem('SYS_HEALTH'); // Clear any old error flags
+          localStorage.removeItem('SYS_HEALTH');
           window.dispatchEvent(new Event('sys-health-change'));
-          alert("✅ Connected Successfully!");
+          alert("✅ Connected & Configured!");
       } catch (e: any) {
           setConnectionStatus('ERROR');
-          alert(`❌ Connection Issue: ${e.message}`);
+          alert(`❌ Issue: ${e.message}`);
       }
   };
 
@@ -334,7 +316,6 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
         <h1 className="text-2xl font-bold text-gray-800">{t('set.title')}</h1>
       </div>
       
-      {/* TABS */}
       <div className="flex space-x-2 border-b border-gray-200 rtl:space-x-reverse overflow-x-auto">
           <button onClick={() => setActiveTab('general')} className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'general' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
              <SettingsIcon className="w-4 h-4" /> {t('set.tab_general')}
@@ -345,18 +326,13 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
           <button onClick={() => setActiveTab('database')} className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'database' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
              <Terminal className="w-4 h-4" /> Cloud Setup
           </button>
-          <button onClick={() => setActiveTab('backup')} className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'backup' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-             <Database className="w-4 h-4" /> Backup
-          </button>
       </div>
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 min-h-[400px]">
         
-        {/* DATABASE SETUP TAB (THE SOLUTION) */}
         {activeTab === 'database' && (
             <div className="space-y-6 animate-in fade-in">
                 
-                {/* Connection Status Section */}
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center gap-3">
                         <div className={`p-2 rounded-full ${connectionStatus === 'SUCCESS' ? 'bg-green-100 text-green-600' : connectionStatus === 'ERROR' ? 'bg-red-100 text-red-600' : 'bg-gray-200 text-gray-500'}`}>
@@ -379,13 +355,12 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                     </button>
                 </div>
 
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
-                    <Shield className="w-6 h-6 text-amber-600 shrink-0 mt-1" />
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3">
+                    <Shield className="w-6 h-6 text-blue-600 shrink-0 mt-1" />
                     <div>
-                        <h4 className="font-bold text-amber-800">Troubleshooting Script (Disable RLS)</h4>
-                        <p className="text-sm text-amber-700 mt-1">
-                            This script will drop all tables and recreate them with <b>Row Level Security DISABLED</b>.
-                            This fixes "Permission Denied" errors by allowing open access for testing.
+                        <h4 className="font-bold text-blue-800">Database Initialization</h4>
+                        <p className="text-sm text-blue-700 mt-1">
+                            Copy this script and run it in the <b>Supabase SQL Editor</b>. It sets up the schema for a single company and enables real-time synchronization.
                         </p>
                     </div>
                 </div>
@@ -403,13 +378,11 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
             </div>
         )}
 
-        {/* GENERAL TAB */}
         {activeTab === 'general' && (
             <div className="space-y-6 animate-in fade-in">
                 <h3 className="font-bold text-gray-800 flex items-center gap-2 border-b pb-2">
                     <Building2 className="w-5 h-5" /> {t('set.company_info')}
                 </h3>
-                {/* ... (Existing General Settings Content) ... */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">{t('set.company_name')}</label>
@@ -420,13 +393,26 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                         <input className="w-full border p-2 rounded-lg" value={settings.companyPhone || ''} onChange={e => setSettings({...settings, companyPhone: e.target.value})} />
                     </div>
                 </div>
+                
+                <div className="mt-8 border-t pt-6">
+                    <h3 className="font-bold text-gray-800 mb-4">Backup & Restore</h3>
+                    <div className="flex gap-4">
+                        <button onClick={handleBackup} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2">
+                            <Download className="w-4 h-4" /> Backup Data
+                        </button>
+                        <label className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2 cursor-pointer">
+                            <Upload className="w-4 h-4" /> Restore Data
+                            <input type="file" className="hidden" onChange={handleRestore} />
+                        </label>
+                    </div>
+                </div>
+
                 <div className="flex justify-end pt-4">
                     <button onClick={handleSaveSettings} className="bg-blue-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 shadow-sm hover:bg-blue-700"><Save className="w-4 h-4" /> {t('set.save')}</button>
                 </div>
             </div>
         )}
 
-        {/* INVOICE TAB */}
         {activeTab === 'invoice' && (
              <div className="space-y-6 animate-in fade-in">
                  <h3 className="font-bold text-gray-800 border-b pb-2">Invoice Template</h3>
@@ -439,28 +425,6 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                  </div>
                  <div className="flex justify-end pt-4"><button onClick={handleSaveSettings} className="bg-blue-600 text-white px-6 py-2 rounded-lg"><Save className="w-4 h-4" /> Save</button></div>
              </div>
-        )}
-
-        {/* BACKUP TAB */}
-        {activeTab === 'backup' && (
-            <div className="space-y-6 animate-in fade-in">
-                <h3 className="font-bold text-gray-800 border-b pb-2">Data Management</h3>
-                <div className="grid grid-cols-2 gap-4">
-                    <button onClick={handleBackup} className="bg-blue-50 p-6 rounded-xl border border-blue-100 flex flex-col items-center hover:bg-blue-100">
-                        <Download className="w-8 h-8 text-blue-600 mb-2" />
-                        <span className="font-bold text-blue-800">Download Backup</span>
-                    </button>
-                    <label className="bg-amber-50 p-6 rounded-xl border border-amber-100 flex flex-col items-center hover:bg-amber-100 cursor-pointer">
-                        <Upload className="w-8 h-8 text-amber-600 mb-2" />
-                        <span className="font-bold text-amber-800">Restore Backup</span>
-                        <input type="file" className="hidden" onChange={handleRestore} />
-                    </label>
-                </div>
-                
-                <div className="mt-8 pt-8 border-t">
-                    <button onClick={() => { if(confirm('Reset all data?')) db.resetDatabase(); }} className="text-red-600 flex items-center gap-2 hover:bg-red-50 px-4 py-2 rounded"><RefreshCw className="w-4 h-4" /> Reset Database</button>
-                </div>
-            </div>
         )}
       </div>
     </div>

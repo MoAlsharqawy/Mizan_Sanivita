@@ -18,8 +18,10 @@ export const PERMISSIONS = [
 
 const ALL_PERMISSIONS_IDS = PERMISSIONS.map(p => p.id);
 
+// SINGLE TENANT MODE: Everyone belongs to this "Company" ID in the database.
+const SHARED_COMPANY_ID = "00000000-0000-0000-0000-000000000000";
+
 export const authService = {
-  // Login with REAL Supabase Auth
   login: async (email: string, password: string): Promise<User> => {
     if (!supabase) throw new Error("Supabase not configured");
 
@@ -31,41 +33,19 @@ export const authService = {
     if (error) throw error;
     if (!data.user) throw new Error("No user returned");
 
-    // Attempt to ensure profile exists to prevent RLS errors later
-    try {
-        await authService.ensureAccountSetup(data.user.id, email);
-    } catch (e) {
-        console.warn("Auto-profile setup failed", e);
-    }
-
-    // We use the User ID as the Company ID for single-tenant simplified mode
+    // We force everyone to have the SAME company_id locally.
+    // This allows the app to treat all data as "mine" (since the app logic filters by company_id).
     const userObj: User = {
         id: data.user.id,
         username: email,
         name: email.split('@')[0],
         role: 'ADMIN',
-        company_id: data.user.id, // VITAL: Bind data to this user directly
+        company_id: SHARED_COMPANY_ID, 
         permissions: ALL_PERMISSIONS_IDS
     };
 
     authService.saveUserToStorage(userObj);
     return userObj;
-  },
-
-  signup: async (email: string, password: string, companyName: string): Promise<void> => {
-      if (!supabase) throw new Error("Supabase not configured");
-
-      const { data, error } = await supabase.auth.signUp({
-          email,
-          password
-      });
-
-      if (error) throw error;
-      
-      if (data.user) {
-          // Create profile immediately
-          await authService.ensureAccountSetup(data.user.id, email);
-      }
   },
 
   logout: async () => {
@@ -82,50 +62,26 @@ export const authService = {
   },
 
   isAuthenticated: (): boolean => {
-    // Check both local storage AND if we have a supabase client/session token
-    const hasLocal = !!localStorage.getItem('user');
-    return hasLocal; 
+    return !!localStorage.getItem('user'); 
   },
 
   hasPermission: (permissionId: string): boolean => {
-      return true; // Always allow in single mode
+      return true; // Full access for single tenant mode
   },
 
   saveUserToStorage: (user: User) => {
       localStorage.setItem('user', JSON.stringify(user));
   },
 
-  // Ensures a profile row exists for the user. Fixes "permission denied for table profiles"
   ensureAccountSetup: async (userId: string, email: string) => {
-      if (!supabase) return;
-      console.log("Ensuring account profile exists...");
-      
-      // Try 'profiles' - standard Supabase table for users
-      const { error } = await supabase.from('profiles').upsert({
-          id: userId,
-          full_name: email.split('@')[0],
-          updated_at: new Date().toISOString()
-      });
-      
-      if (error) {
-          console.warn("Profile upsert failed (profiles table might not exist or schema differs):", error.message);
-      }
-  },
-
-  transformUser: (sbUser: any): User => {
-      return {
-          id: sbUser.id,
-          username: sbUser.email,
-          name: sbUser.email.split('@')[0],
-          role: 'ADMIN',
-          company_id: sbUser.id 
-      };
+      // Setup logic if needed
   },
 
   getUsers: (): any[] => {
-      return []; 
+      return []; // Admin manages users via Supabase Dashboard
   },
   
-  saveUser: (user: any) => {}, 
-  deleteUser: (id: string) => {}
+  saveUser: (user: any) => {},
+  deleteUser: (id: string) => {},
+  signup: async () => {} // Disabled
 };
