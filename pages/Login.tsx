@@ -41,6 +41,8 @@ export default function Login() {
           setShowConfig(true);
       } else if (msg.includes("Invalid login")) {
           setError("Invalid email or password.");
+      } else if (msg.includes("Email logins are disabled")) {
+          setError("Login Disabled: Go to Supabase > Auth > Providers > Enable Email.");
       } else {
           setError(msg || 'Authentication failed');
       }
