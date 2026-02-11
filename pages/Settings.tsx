@@ -3,23 +3,32 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../services/db';
 import { authService, PERMISSIONS } from '../services/auth';
 import { supabase } from '../services/supabase';
-import { Save, RefreshCw, Building2, FileText, Settings as SettingsIcon, Users, Plus, Edit2, Trash2, X, Shield, Key, CheckSquare, Printer, Upload, Image as ImageIcon, Database, Download, Wrench, Copy, Terminal, Wifi, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Save, RefreshCw, Building2, FileText, Settings as SettingsIcon, Users, Plus, Edit2, Trash2, X, Shield, Key, CheckSquare, Printer, Upload, Image as ImageIcon, Database, Download, Wrench, Copy, Terminal, Wifi, CheckCircle2, XCircle, Loader2, AlertTriangle } from 'lucide-react';
 import { t } from '../utils/t';
 
 export default function Settings() {
   const [settings, setSettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<'general' | 'invoice' | 'database'>('general');
   const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'CHECKING' | 'SUCCESS' | 'ERROR'>('IDLE');
+  const [sysHealth, setSysHealth] = useState<string | null>(null);
+
+  useEffect(() => {
+      const health = localStorage.getItem('SYS_HEALTH');
+      setSysHealth(health);
+      if (health) {
+          setActiveTab('database');
+      }
+  }, []);
 
   // --- FINAL PRODUCTION SQL SCRIPT ---
   const SQL_SCRIPT = `
--- ⚡ MIZAN ONLINE: SINGLE TENANT SETUP SCRIPT
--- Run this in Supabase SQL Editor to initialize the system.
+-- ⚡ MIZAN ONLINE: FIX 403 PERMISSION ERRORS SCRIPT
+-- Run this in Supabase SQL Editor.
 
 -- 1. EXTENSIONS
 create extension if not exists moddatetime schema extensions;
 
--- 2. CLEANUP (CAUTION: DELETES DATA)
+-- 2. CLEANUP (CAUTION: DELETES DATA TO ENSURE SCHEMA MATCH)
 DROP TABLE IF EXISTS public.activity_logs CASCADE;
 DROP TABLE IF EXISTS public.deals CASCADE;
 DROP TABLE IF EXISTS public.cash_transactions CASCADE;
@@ -116,7 +125,7 @@ create table public.invoices (
   id uuid primary key,
   company_id uuid not null,
   invoice_number text,
-  customer_id uuid, -- loose link to avoid sync constraints
+  customer_id uuid, 
   date timestamp with time zone,
   total_before_discount numeric,
   total_discount numeric,
@@ -177,26 +186,16 @@ create table public.deals (
 );
 
 -- 4. TRIGGERS (Auto-update 'updated_at')
-create trigger handle_updated_at before update on settings
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on warehouses
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on representatives
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on suppliers
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on customers
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on products
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on batches
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on invoices
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on purchase_invoices
-  for each row execute procedure moddatetime (updated_at);
-create trigger handle_updated_at before update on cash_transactions
-  for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on settings for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on warehouses for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on representatives for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on suppliers for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on customers for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on products for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on batches for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on invoices for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on purchase_invoices for each row execute procedure moddatetime (updated_at);
+create trigger handle_updated_at before update on cash_transactions for each row execute procedure moddatetime (updated_at);
 
 -- 5. RLS POLICIES (OPEN ACCESS FOR LOGGED IN USERS)
 alter table settings enable row level security;
@@ -212,19 +211,19 @@ alter table purchase_invoices enable row level security;
 alter table cash_transactions enable row level security;
 alter table deals enable row level security;
 
--- Allow read/write for ANY authenticated user (Single Company Mode)
-create policy "Enable access for all users" on settings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on warehouses for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on representatives for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on suppliers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on customers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on products for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on batches for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on invoice_items for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on purchase_invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on cash_transactions for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Enable access for all users" on deals for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+-- POLICY: Allow read/write for ANY authenticated user
+create policy "Allow All Auth" on settings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on warehouses for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on representatives for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on suppliers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on customers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on products for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on batches for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on invoice_items for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on purchase_invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on cash_transactions for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "Allow All Auth" on deals for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
 -- 6. STORAGE
 insert into storage.buckets (id, name, public) values ('logos', 'logos', true) on conflict (id) do nothing;
@@ -236,9 +235,6 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
 
   useEffect(() => {
     db.getSettings().then(setSettings);
-    if (localStorage.getItem('SYS_HEALTH')) {
-        setActiveTab('database');
-    }
   }, []);
 
   const handleSaveSettings = async () => {
@@ -278,7 +274,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
 
   const copySQL = () => {
       navigator.clipboard.writeText(SQL_SCRIPT);
-      alert("SQL Copied! Run this in Supabase SQL Editor.");
+      alert("✅ SQL Copied! Go to Supabase SQL Editor and run it.");
   };
 
   const handleTestConnection = async () => {
@@ -290,23 +286,24 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
       try {
           const { data: { session }, error: authError } = await supabase.auth.getSession();
           if (authError) throw authError;
-          if (!session) throw new Error("Not logged in.");
+          if (!session) throw new Error("Not logged in. Please log in first.");
 
           const { error: dbError } = await supabase.from('settings').select('*').limit(1);
           
           if (dbError) {
-              if (dbError.code === '42P01') throw new Error("Tables Missing. Run SQL script.");
-              if (dbError.code === '42501') throw new Error("Permission Denied. Run SQL script.");
+              if (dbError.code === '42P01') throw new Error("Tables Missing. Please run the SQL script.");
+              if (dbError.code === '42501') throw new Error("Permission Denied (403). Please run the SQL script to fix policies.");
               throw dbError;
           }
 
           setConnectionStatus('SUCCESS');
           localStorage.removeItem('SYS_HEALTH');
+          setSysHealth(null);
           window.dispatchEvent(new Event('sys-health-change'));
-          alert("✅ Connected & Configured!");
+          alert("✅ Connected Successfully!");
       } catch (e: any) {
           setConnectionStatus('ERROR');
-          alert(`❌ Issue: ${e.message}`);
+          alert(`❌ Connection Issue: ${e.message}`);
       }
   };
 
@@ -324,7 +321,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
              <FileText className="w-4 h-4" /> {t('set.tab_invoice')}
           </button>
           <button onClick={() => setActiveTab('database')} className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'database' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-             <Terminal className="w-4 h-4" /> Cloud Setup
+             <Terminal className="w-4 h-4" /> Cloud Setup {sysHealth && <AlertTriangle className="w-4 h-4 text-red-500 animate-pulse" />}
           </button>
       </div>
 
@@ -333,6 +330,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
         {activeTab === 'database' && (
             <div className="space-y-6 animate-in fade-in">
                 
+                {/* Status Bar */}
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center gap-3">
                         <div className={`p-2 rounded-full ${connectionStatus === 'SUCCESS' ? 'bg-green-100 text-green-600' : connectionStatus === 'ERROR' ? 'bg-red-100 text-red-600' : 'bg-gray-200 text-gray-500'}`}>
@@ -341,7 +339,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                         <div>
                             <h4 className="font-bold text-gray-800">Connection Status</h4>
                             <p className="text-sm text-gray-500">
-                                {connectionStatus === 'SUCCESS' ? 'Connected to Supabase' : connectionStatus === 'ERROR' ? 'Connection Failed' : 'Unknown Status'}
+                                {connectionStatus === 'SUCCESS' ? 'Connected to Supabase' : connectionStatus === 'ERROR' ? 'Connection Failed' : sysHealth ? 'Issues Detected' : 'Unknown Status'}
                             </p>
                         </div>
                     </div>
@@ -355,23 +353,29 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                     </button>
                 </div>
 
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3">
-                    <Shield className="w-6 h-6 text-blue-600 shrink-0 mt-1" />
+                {/* Setup Instructions */}
+                <div className={`border rounded-lg p-4 flex items-start gap-3 ${sysHealth ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+                    <Shield className={`w-6 h-6 shrink-0 mt-1 ${sysHealth ? 'text-red-600' : 'text-blue-600'}`} />
                     <div>
-                        <h4 className="font-bold text-blue-800">Database Initialization</h4>
-                        <p className="text-sm text-blue-700 mt-1">
-                            Copy this script and run it in the <b>Supabase SQL Editor</b>. It sets up the schema for a single company and enables real-time synchronization.
+                        <h4 className={`font-bold ${sysHealth ? 'text-red-800' : 'text-blue-800'}`}>
+                            {sysHealth === 'PERMISSION_DENIED' ? 'Fix Permission Errors (403)' : 'Database Initialization'}
+                        </h4>
+                        <p className={`text-sm mt-1 ${sysHealth ? 'text-red-700' : 'text-blue-700'}`}>
+                            {sysHealth 
+                                ? 'The system is unable to sync because policies are blocking access. Run the SQL script below to fix permissions.' 
+                                : 'Copy this script and run it in the Supabase SQL Editor. It sets up the schema and enables real-time synchronization.'}
                         </p>
                     </div>
                 </div>
 
+                {/* SQL Code Block */}
                 <div className="relative">
-                    <div className="absolute top-2 right-2">
-                        <button onClick={copySQL} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-2 shadow-sm">
-                            <Copy className="w-3 h-3" /> Copy SQL
+                    <div className="absolute top-2 right-2 z-10">
+                        <button onClick={copySQL} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded flex items-center gap-2 shadow-lg hover:scale-105 transition-transform">
+                            <Copy className="w-3 h-3" /> Copy SQL Script
                         </button>
                     </div>
-                    <pre className="bg-slate-900 text-slate-300 p-4 rounded-xl text-xs overflow-x-auto font-mono h-96 border border-slate-700">
+                    <pre className="bg-slate-900 text-slate-300 p-4 rounded-xl text-xs overflow-x-auto font-mono h-96 border border-slate-700 shadow-inner relative">
                         {SQL_SCRIPT}
                     </pre>
                 </div>
