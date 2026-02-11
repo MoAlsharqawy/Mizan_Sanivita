@@ -22,13 +22,15 @@ export default function Settings() {
 
   // --- FINAL PRODUCTION SQL SCRIPT ---
   const SQL_SCRIPT = `
--- ⚡ MIZAN ONLINE: FIX 403 PERMISSION ERRORS SCRIPT
+-- ⚡ MIZAN ONLINE: ULTIMATE FIX SCRIPT
 -- Run this in Supabase SQL Editor.
 
 -- 1. EXTENSIONS
 create extension if not exists moddatetime schema extensions;
 
--- 2. CLEANUP (CAUTION: DELETES DATA TO ENSURE SCHEMA MATCH)
+-- 2. TABLES & RLS
+-- We use "create table if not exists" to be safe, but dropping first ensures clean slate for mismatched schemas.
+-- RECOMMENDATION: Drop if you are fixing a broken schema.
 DROP TABLE IF EXISTS public.activity_logs CASCADE;
 DROP TABLE IF EXISTS public.deals CASCADE;
 DROP TABLE IF EXISTS public.cash_transactions CASCADE;
@@ -42,9 +44,8 @@ DROP TABLE IF EXISTS public.suppliers CASCADE;
 DROP TABLE IF EXISTS public.representatives CASCADE;
 DROP TABLE IF EXISTS public.warehouses CASCADE;
 DROP TABLE IF EXISTS public.settings CASCADE;
-DROP TABLE IF EXISTS public.profiles CASCADE;
 
--- 3. TABLES
+-- SETTINGS
 create table public.settings (
   company_id uuid not null primary key,
   company_name text,
@@ -56,7 +57,10 @@ create table public.settings (
   invoice_template text,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table settings enable row level security;
+create policy "Allow Auth" on settings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- WAREHOUSES
 create table public.warehouses (
   id uuid primary key,
   company_id uuid not null,
@@ -64,7 +68,10 @@ create table public.warehouses (
   is_default boolean default false,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table warehouses enable row level security;
+create policy "Allow Auth" on warehouses for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- REPS
 create table public.representatives (
   id uuid primary key,
   company_id uuid not null,
@@ -73,7 +80,10 @@ create table public.representatives (
   phone text,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table representatives enable row level security;
+create policy "Allow Auth" on representatives for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- SUPPLIERS
 create table public.suppliers (
   id uuid primary key,
   company_id uuid not null,
@@ -84,7 +94,10 @@ create table public.suppliers (
   current_balance numeric default 0,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table suppliers enable row level security;
+create policy "Allow Auth" on suppliers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- CUSTOMERS
 create table public.customers (
   id uuid primary key,
   company_id uuid not null,
@@ -97,7 +110,10 @@ create table public.customers (
   current_balance numeric default 0,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table customers enable row level security;
+create policy "Allow Auth" on customers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- PRODUCTS
 create table public.products (
   id text not null,
   company_id uuid not null,
@@ -106,7 +122,10 @@ create table public.products (
   updated_at timestamp with time zone default timezone('utc'::text, now()),
   primary key (id, company_id)
 );
+alter table products enable row level security;
+create policy "Allow Auth" on products for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- BATCHES
 create table public.batches (
   id uuid primary key,
   company_id uuid not null,
@@ -120,7 +139,10 @@ create table public.batches (
   status text,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table batches enable row level security;
+create policy "Allow Auth" on batches for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- INVOICES
 create table public.invoices (
   id uuid primary key,
   company_id uuid not null,
@@ -134,7 +156,10 @@ create table public.invoices (
   type text,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table invoices enable row level security;
+create policy "Allow Auth" on invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- INVOICE ITEMS
 create table public.invoice_items (
   id uuid primary key,
   company_id uuid not null,
@@ -147,7 +172,10 @@ create table public.invoice_items (
   discount_percentage numeric default 0,
   line_total numeric
 );
+alter table invoice_items enable row level security;
+create policy "Allow Auth" on invoice_items for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- PURCHASE INVOICES
 create table public.purchase_invoices (
   id uuid primary key,
   company_id uuid not null,
@@ -160,7 +188,10 @@ create table public.purchase_invoices (
   items jsonb,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table purchase_invoices enable row level security;
+create policy "Allow Auth" on purchase_invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- CASH TRANSACTIONS
 create table public.cash_transactions (
   id text not null,
   company_id uuid not null,
@@ -174,7 +205,10 @@ create table public.cash_transactions (
   updated_at timestamp with time zone default timezone('utc'::text, now()),
   primary key (id, company_id)
 );
+alter table cash_transactions enable row level security;
+create policy "Allow Auth" on cash_transactions for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- DEALS
 create table public.deals (
   id uuid primary key,
   company_id uuid not null,
@@ -184,8 +218,10 @@ create table public.deals (
   customer_ids jsonb,
   created_at timestamp with time zone
 );
+alter table deals enable row level security;
+create policy "Allow Auth" on deals for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
--- 4. TRIGGERS (Auto-update 'updated_at')
+-- 3. TRIGGERS (Auto-update 'updated_at')
 create trigger handle_updated_at before update on settings for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on warehouses for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on representatives for each row execute procedure moddatetime (updated_at);
@@ -197,35 +233,7 @@ create trigger handle_updated_at before update on invoices for each row execute 
 create trigger handle_updated_at before update on purchase_invoices for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on cash_transactions for each row execute procedure moddatetime (updated_at);
 
--- 5. RLS POLICIES (OPEN ACCESS FOR LOGGED IN USERS)
-alter table settings enable row level security;
-alter table warehouses enable row level security;
-alter table representatives enable row level security;
-alter table suppliers enable row level security;
-alter table customers enable row level security;
-alter table products enable row level security;
-alter table batches enable row level security;
-alter table invoices enable row level security;
-alter table invoice_items enable row level security;
-alter table purchase_invoices enable row level security;
-alter table cash_transactions enable row level security;
-alter table deals enable row level security;
-
--- POLICY: Allow read/write for ANY authenticated user
-create policy "Allow All Auth" on settings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on warehouses for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on representatives for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on suppliers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on customers for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on products for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on batches for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on invoice_items for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on purchase_invoices for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on cash_transactions for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "Allow All Auth" on deals for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-
--- 6. STORAGE
+-- 4. STORAGE BUCKET
 insert into storage.buckets (id, name, public) values ('logos', 'logos', true) on conflict (id) do nothing;
 drop policy if exists "Logos Public" on storage.objects;
 drop policy if exists "Logos Upload" on storage.objects;
