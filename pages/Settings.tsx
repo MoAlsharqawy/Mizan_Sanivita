@@ -20,17 +20,22 @@ export default function Settings() {
       }
   }, []);
 
-  // --- FINAL PRODUCTION SQL SCRIPT ---
+  // --- FINAL PRODUCTION SQL SCRIPT (v2 - Fixes Auth 500 Error) ---
   const SQL_SCRIPT = `
--- ⚡ MIZAN ONLINE: ULTIMATE FIX SCRIPT
+-- ⚡ MIZAN ONLINE: ULTIMATE FIX SCRIPT (v2)
 -- Run this in Supabase SQL Editor.
+
+-- 0. FIX AUTHENTICATION ERRORS (CRITICAL)
+-- Removes broken triggers that cause "Error 500" when adding users
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP FUNCTION IF EXISTS public.handle_new_user CASCADE;
 
 -- 1. EXTENSIONS
 create extension if not exists moddatetime schema extensions;
 
 -- 2. TABLES & RLS
--- We use "create table if not exists" to be safe, but dropping first ensures clean slate for mismatched schemas.
--- RECOMMENDATION: Drop if you are fixing a broken schema.
+-- Drops existing tables to ensure clean schema compatible with the app
 DROP TABLE IF EXISTS public.activity_logs CASCADE;
 DROP TABLE IF EXISTS public.deals CASCADE;
 DROP TABLE IF EXISTS public.cash_transactions CASCADE;
@@ -282,7 +287,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
 
   const copySQL = () => {
       navigator.clipboard.writeText(SQL_SCRIPT);
-      alert("✅ SQL Copied! Go to Supabase SQL Editor and run it.");
+      alert("✅ SQL Copied! Go to Supabase SQL Editor and run it to fix Auth & Database errors.");
   };
 
   const handleTestConnection = async () => {
@@ -366,12 +371,12 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                     <Shield className={`w-6 h-6 shrink-0 mt-1 ${sysHealth ? 'text-red-600' : 'text-blue-600'}`} />
                     <div>
                         <h4 className={`font-bold ${sysHealth ? 'text-red-800' : 'text-blue-800'}`}>
-                            {sysHealth === 'PERMISSION_DENIED' ? 'Fix Permission Errors (403)' : 'Database Initialization'}
+                            {sysHealth === 'PERMISSION_DENIED' ? 'Fix Permission Errors (403)' : 'Database Initialization & Auth Fixes'}
                         </h4>
                         <p className={`text-sm mt-1 ${sysHealth ? 'text-red-700' : 'text-blue-700'}`}>
                             {sysHealth 
                                 ? 'The system is unable to sync because policies are blocking access. Run the SQL script below to fix permissions.' 
-                                : 'Copy this script and run it in the Supabase SQL Editor. It sets up the schema and enables real-time synchronization.'}
+                                : 'Copy this script and run it in the Supabase SQL Editor. It sets up the schema and fixes "Error 500" when adding users.'}
                         </p>
                     </div>
                 </div>
