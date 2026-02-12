@@ -36,6 +36,12 @@ export const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
 
 export const isSupabaseConfigured = () => !!supabase;
 
+// Helper to access config in other components (e.g. UsersManager)
+export const getSupabaseConfig = () => ({
+    url: SUPABASE_URL,
+    key: SUPABASE_ANON_KEY
+});
+
 // Helper to configure credentials from UI manually
 export const configureSupabase = (url: string, key: string) => {
     if (!url || !key) return;

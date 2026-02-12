@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../services/supabase';
+import { supabase, getSupabaseConfig } from '../services/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { 
   Users, UserPlus, Shield, Check, X, Trash2, 
@@ -61,12 +61,11 @@ export const UsersManager = () => {
       setIsCreating(true);
       try {
           // 1. Create a temporary client to avoid logging out the current admin
-          const supabaseUrl = localStorage.getItem('MZN_SUPABASE_URL');
-          const supabaseKey = localStorage.getItem('MZN_SUPABASE_KEY');
+          const { url, key } = getSupabaseConfig();
           
-          if (!supabaseUrl || !supabaseKey) throw new Error("إعدادات الاتصال مفقودة");
+          if (!url || !key) throw new Error("إعدادات الاتصال مفقودة");
 
-          const tempClient = createClient(supabaseUrl, supabaseKey, {
+          const tempClient = createClient(url, key, {
               auth: {
                   persistSession: false, // Critical: Don't store this session
                   autoRefreshToken: false,
