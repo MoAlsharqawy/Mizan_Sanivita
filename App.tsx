@@ -22,6 +22,7 @@ const Reports = lazy(() => import('./pages/Reports'));
 const Deals = lazy(() => import('./pages/Deals'));
 const ActivityLogPage = lazy(() => import('./pages/ActivityLog'));
 const Login = lazy(() => import('./pages/Login'));
+const InvoicePrint = lazy(() => import('./components/InvoicePrint'));
 
 // Loading Fallback Component
 const PageLoader = () => (
@@ -40,6 +41,13 @@ const App: React.FC = () => {
           </Suspense>
         } />
         
+        {/* Print Route (Outside Layout for full screen) */}
+        <Route path="/print/invoice/:id" element={
+           <Suspense fallback={<PageLoader />}>
+              <InvoicePrint />
+           </Suspense>
+        } />
+
         <Route path="/*" element={
            <ProtectedRoute>
              <Layout>

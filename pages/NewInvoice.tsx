@@ -220,7 +220,8 @@ function NewInvoice() {
       }
       if (result.success) {
         if (print && result.id) {
-            navigate('/invoices', { state: { autoPrintId: result.id } });
+            // Redirect to print page directly
+            window.location.href = `/#/print/invoice/${result.id}`;
         } else {
             navigate('/invoices');
         }
