@@ -56,29 +56,45 @@ export default function InvoicePrint() {
       
       {/* HEADER */}
       <div className="flex justify-between items-start mb-4 border-b-2 border-slate-800 pb-4">
-         {/* Right: Customer */}
+         {/* Right: Invoice Info & Customer */}
          <div className="text-right w-1/3">
-            <h3 className="font-bold text-slate-500 mb-1">العميل:</h3>
-            <p className="font-bold text-base text-slate-900">{customer?.name || 'عميل نقدي'}</p>
-            <p className="text-slate-600 mt-1">{customer?.address || '---'}</p>
-            <p className="text-slate-600 font-mono" dir="ltr">{customer?.phone || ''}</p>
+            {/* Invoice Meta */}
+            <div className="mb-3">
+                <p className="font-bold text-slate-800 text-sm mb-1">رقم الفاتورة: <span className="font-mono text-base">{invoice.invoice_number}</span></p>
+                <p className="font-bold text-slate-600 text-[11px]">التاريخ: <span className="font-mono">{new Date(invoice.date).toLocaleDateString('en-GB')}</span></p>
+            </div>
+            
+            <div className="border-t border-slate-300 pt-2">
+                <h3 className="font-bold text-slate-500 text-[10px] mb-1">العميل:</h3>
+                <p className="font-bold text-sm text-slate-900 mb-0.5">{customer?.name || 'عميل نقدي'}</p>
+                <p className="text-[10px] text-slate-600">{customer?.address || ''}</p>
+                <p className="text-[10px] text-slate-600 font-mono" dir="ltr">{customer?.phone || ''}</p>
+            </div>
          </div>
 
          {/* Center: Title */}
-         <div className="text-center w-1/3 pt-1">
-            <div className="inline-block border-2 border-slate-900 px-6 py-2 rounded-lg bg-slate-50">
+         <div className="text-center w-1/3 pt-4">
+            <div className="inline-block border-2 border-slate-900 px-8 py-2 rounded-lg bg-slate-50">
                 <h1 className="font-extrabold text-xl text-slate-900">فاتورة مبيعات</h1>
-                <p className="text-[10px] font-bold mt-1 text-slate-600">رقم: {invoice.invoice_number}</p>
             </div>
          </div>
 
          {/* Left: Company */}
          <div className="text-left w-1/3 pl-2">
-            <h3 className="font-bold text-lg text-slate-900">{settings?.companyName}</h3>
-            <div className="text-slate-600 space-y-0.5 mt-1">
-                {settings?.companyTaxNumber && <p>الرقم الضريبي: <span className="font-mono">{settings.companyTaxNumber}</span></p>}
-                {settings?.companyCrNumber && <p>السجل التجاري: <span className="font-mono">{settings.companyCrNumber}</span></p>}
-                <p className="font-bold mt-2 bg-slate-100 px-2 py-1 rounded inline-block">التاريخ: {new Date(invoice.date).toLocaleDateString('en-GB')}</p>
+            <h3 className="font-bold text-base text-slate-900 whitespace-nowrap overflow-hidden text-ellipsis" title={settings?.companyName}>{settings?.companyName}</h3>
+            <div className="text-slate-600 space-y-1 mt-2 text-[10px]">
+                {settings?.companyTaxNumber && (
+                    <p className="flex justify-end gap-2">
+                        <span>الرقم الضريبي:</span>
+                        <span className="font-mono font-bold">{settings.companyTaxNumber}</span>
+                    </p>
+                )}
+                {settings?.companyCrNumber && (
+                    <p className="flex justify-end gap-2">
+                        <span>السجل التجاري:</span>
+                        <span className="font-mono font-bold">{settings.companyCrNumber}</span>
+                    </p>
+                )}
             </div>
          </div>
       </div>
