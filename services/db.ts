@@ -1,6 +1,6 @@
 
-
-import Dexie, { Table } from 'dexie';
+import { Dexie } from 'dexie';
+import type { Table } from 'dexie';
 import {
   Product,
   Batch,
@@ -51,7 +51,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
 };
 
 class MizanDatabase extends Dexie {
-    // Explicit Table Definitions to avoid 'any'
+    // Explicit Table Definitions
     products!: Table<Product, string>;
     batches!: Table<Batch, string>;
     customers!: Table<Customer, string>;
@@ -492,8 +492,7 @@ class MizanDatabase extends Dexie {
         const pattern = `${prefix}${year}${month}-`;
         
         // OPTIMIZED: Use index query instead of toArray()
-        // This requires 'key' to be an index in the Dexie definition (which it is for invoices, purchaseInvoices, cashTransactions)
-        const lastRecord = await ((this as any).table(table as string) as any)
+        const lastRecord = await (this as any).table(table as string)
             .where(key)
             .startsWith(pattern)
             .last();
