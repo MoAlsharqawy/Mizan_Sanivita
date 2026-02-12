@@ -1,27 +1,17 @@
 
 import React, { useState, useEffect } from 'react';
-import { db } from '../services/db';
-import { authService, PERMISSIONS } from '../services/auth';
+import { db, SystemSettings } from '../services/db'; // Ensure paths are correct based on your structure
 import { supabase } from '../services/supabase';
-import { Save, RefreshCw, Building2, FileText, Settings as SettingsIcon, Users, Plus, Edit2, Trash2, X, Shield, Key, CheckSquare, Printer, Upload, Image as ImageIcon, Database, Download, Wrench, Copy, Terminal, Wifi, CheckCircle2, XCircle, Loader2, AlertTriangle } from 'lucide-react';
-import { t } from '../utils/t';
+import { 
+  Save, Building2, FileText, Settings as SettingsIcon, 
+  Wifi, Shield, Database, Download, Upload, 
+  Trash2, Monitor, Printer, Globe, CreditCard, 
+  CheckCircle2, AlertTriangle, RefreshCw, Copy, 
+  ChevronRight, LayoutDashboard, Terminal 
+} from 'lucide-react';
 
-export default function Settings() {
-  const [settings, setSettings] = useState<any>({});
-  const [activeTab, setActiveTab] = useState<'general' | 'invoice' | 'database'>('general');
-  const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'CHECKING' | 'SUCCESS' | 'ERROR'>('IDLE');
-  const [sysHealth, setSysHealth] = useState<string | null>(null);
-
-  useEffect(() => {
-      const health = localStorage.getItem('SYS_HEALTH');
-      setSysHealth(health);
-      if (health) {
-          setActiveTab('database');
-      }
-  }, []);
-
-  // --- FINAL PRODUCTION SQL SCRIPT (v4 - Added Atomic Transaction RPC) ---
-  const SQL_SCRIPT = `
+// --- SQL SCRIPT (Preserved for System Health) ---
+const SQL_SCRIPT = `
 -- ⚡ MIZAN ONLINE: ULTIMATE FIX SCRIPT (v4 - Atomic Transactions)
 -- Run this in Supabase SQL Editor.
 
@@ -307,206 +297,444 @@ drop policy if exists "Logos Public" on storage.objects;
 drop policy if exists "Logos Upload" on storage.objects;
 create policy "Logos Public" on storage.objects for select using ( bucket_id = 'logos' );
 create policy "Logos Upload" on storage.objects for insert with check ( bucket_id = 'logos' );
-  `;
+`;
 
+// Types for UI Sections
+type SettingsSection = 'general' | 'preferences' | 'invoice' | 'data' | 'system';
+
+export default function Settings() {
+  const [activeSection, setActiveSection] = useState<SettingsSection>('general');
+  const [settings, setSettings] = useState<SystemSettings | any>({});
+  const [loading, setLoading] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'CHECKING' | 'SUCCESS' | 'ERROR'>('IDLE');
+  const [sysHealth, setSysHealth] = useState<string | null>(null);
+
+  // Load Settings on Mount
   useEffect(() => {
-    db.getSettings().then(setSettings);
+    const loadData = async () => {
+      const data = await db.getSettings();
+      setSettings(data);
+      const health = localStorage.getItem('SYS_HEALTH');
+      setSysHealth(health);
+    };
+    loadData();
   }, []);
 
-  const handleSaveSettings = async () => {
-    await db.updateSettings(settings);
-    window.location.reload();
-  };
-
-  const handleBackup = async () => {
-      const data = await db.exportDatabase();
-      const blob = new Blob([data], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `mizan_backup_${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-  };
-
-  const handleRestore = (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files && e.target.files[0]) {
-          const file = e.target.files[0];
-          const reader = new FileReader();
-          reader.onload = async (event) => {
-              try {
-                  const content = event.target?.result as string;
-                  if (confirm("WARNING: This will overwrite all current data. Are you sure?")) {
-                      await db.importDatabase(content);
-                      window.location.reload();
-                  }
-              } catch (err) { alert("Error reading file."); }
-          };
-          reader.readAsText(file);
-      }
-  };
-
-  const copySQL = () => {
-      navigator.clipboard.writeText(SQL_SCRIPT);
-      alert("✅ SQL Copied! Go to Supabase SQL Editor and run it to fix Auth & Database errors.");
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      await db.updateSettings(settings);
+      // Simulate network delay for UX
+      setTimeout(() => {
+        setLoading(false);
+        alert("✅ تم حفظ الإعدادات بنجاح");
+      }, 800);
+    } catch (e) {
+      setLoading(false);
+      alert("❌ حدث خطأ أثناء الحفظ");
+    }
   };
 
   const handleTestConnection = async () => {
-      if (!supabase) {
-          alert("Supabase not configured!");
-          return;
-      }
+      if (!supabase) { alert("Supabase not configured!"); return; }
       setConnectionStatus('CHECKING');
       try {
-          const { data: { session }, error: authError } = await supabase.auth.getSession();
-          if (authError) throw authError;
-          if (!session) throw new Error("Not logged in. Please log in first.");
-
-          const { error: dbError } = await supabase.from('settings').select('*').limit(1);
-          
-          if (dbError) {
-              if (dbError.code === '42P01') throw new Error("Tables Missing. Please run the SQL script.");
-              if (dbError.code === '42501') throw new Error("Permission Denied (403). Please run the SQL script to fix policies.");
-              throw dbError;
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) throw new Error("Not logged in.");
+          const { error } = await supabase.from('settings').select('company_id').limit(1);
+          if (error) {
+              if (error.code === '42P01') throw new Error("Tables Missing (42P01). Run SQL.");
+              if (error.code === '42501') throw new Error("Permission Denied (403). Run SQL.");
+              throw error;
           }
-
+          
           setConnectionStatus('SUCCESS');
           localStorage.removeItem('SYS_HEALTH');
           setSysHealth(null);
-          window.dispatchEvent(new Event('sys-health-change'));
-          alert("✅ Connected Successfully!");
       } catch (e: any) {
           setConnectionStatus('ERROR');
-          alert(`❌ Connection Issue: ${e.message}`);
+          alert(`Connection Error: ${e.message || 'Unknown error'}`);
       }
   };
 
-  return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-800">{t('set.title')}</h1>
-      </div>
-      
-      <div className="flex space-x-2 border-b border-gray-200 rtl:space-x-reverse overflow-x-auto">
-          <button onClick={() => setActiveTab('general')} className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'general' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-             <SettingsIcon className="w-4 h-4" /> {t('set.tab_general')}
-          </button>
-          <button onClick={() => setActiveTab('invoice')} className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'invoice' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-             <FileText className="w-4 h-4" /> {t('set.tab_invoice')}
-          </button>
-          <button onClick={() => setActiveTab('database')} className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'database' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-             <Terminal className="w-4 h-4" /> Cloud Setup {sysHealth && <AlertTriangle className="w-4 h-4 text-red-500 animate-pulse" />}
-          </button>
-      </div>
+  // --- UI COMPONENTS ---
 
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 min-h-[400px]">
-        
-        {activeTab === 'database' && (
-            <div className="space-y-6 animate-in fade-in">
+  const SidebarItem = ({ id, icon: Icon, label, danger = false }: any) => (
+    <button
+      onClick={() => setActiveSection(id)}
+      className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-all mb-1
+        ${activeSection === id 
+          ? (danger ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-200') 
+          : 'text-gray-600 hover:bg-gray-100'
+        }`}
+    >
+      <Icon className={`w-5 h-5 ${activeSection === id ? (danger ? 'text-red-600' : 'text-blue-600') : 'text-gray-400'}`} />
+      {label}
+      {activeSection === id && <ChevronRight className="w-4 h-4 ml-auto opacity-50" />}
+    </button>
+  );
+
+  return (
+    <div className="flex flex-col md:flex-row min-h-screen bg-gray-50/50 gap-6 p-6">
+      
+      {/* SIDEBAR NAVIGATION */}
+      <aside className="w-full md:w-64 shrink-0">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sticky top-6">
+          <div className="mb-6 px-2">
+            <h2 className="text-xl font-bold text-gray-800">الإعدادات</h2>
+            <p className="text-xs text-gray-500 mt-1">إدارة النظام والتفضيلات</p>
+          </div>
+          
+          <nav className="space-y-1">
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2 mt-2">عام</div>
+            <SidebarItem id="general" icon={Building2} label="معلومات الشركة" />
+            <SidebarItem id="preferences" icon={Monitor} label="المظهر واللغة" />
+            
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2 mt-6">المبيعات</div>
+            <SidebarItem id="invoice" icon={FileText} label="قوالب الفواتير" />
+            
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2 mt-6">النظام</div>
+            <SidebarItem id="system" icon={Terminal} label="الربط السحابي" />
+            <SidebarItem id="data" icon={Database} label="النسخ الاحتياطي" danger />
+          </nav>
+        </div>
+      </aside>
+
+      {/* MAIN CONTENT AREA */}
+      <main className="flex-1 min-w-0">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 min-h-[600px] flex flex-col">
+          
+          {/* Header */}
+          <div className="border-b px-8 py-6 flex justify-between items-center bg-white rounded-t-2xl">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                {activeSection === 'general' && 'معلومات الشركة'}
+                {activeSection === 'preferences' && 'تفضيلات النظام'}
+                {activeSection === 'invoice' && 'إعدادات الفواتير'}
+                {activeSection === 'data' && 'إدارة البيانات'}
+                {activeSection === 'system' && 'حالة النظام والسحابة'}
+              </h1>
+              <p className="text-sm text-gray-500 mt-1">قم بتعديل وتخصيص إعدادات التطبيق الخاصة بك</p>
+            </div>
+            
+            {activeSection !== 'system' && activeSection !== 'data' && (
+              <button 
+                onClick={handleSave} 
+                disabled={loading}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-medium shadow-md shadow-blue-200 transition-all active:scale-95 disabled:opacity-70"
+              >
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                حفظ التغييرات
+              </button>
+            )}
+          </div>
+
+          {/* Body */}
+          <div className="p-8">
+            
+            {/* --- 1. GENERAL --- */}
+            {activeSection === 'general' && (
+              <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 
-                {/* Status Bar */}
-                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
-                    <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-full ${connectionStatus === 'SUCCESS' ? 'bg-green-100 text-green-600' : connectionStatus === 'ERROR' ? 'bg-red-100 text-red-600' : 'bg-gray-200 text-gray-500'}`}>
-                            <Wifi className="w-5 h-5" />
+                {/* Logo Section */}
+                <div className="flex items-start gap-6 pb-8 border-b border-gray-100">
+                  <div className="w-24 h-24 bg-gray-100 rounded-2xl flex items-center justify-center border-2 border-dashed border-gray-300 text-gray-400">
+                    {settings.companyLogo ? (
+                       <img src={settings.companyLogo} className="w-full h-full object-contain rounded-2xl" />
+                    ) : (
+                       <Building2 className="w-8 h-8" />
+                    )}
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900">شعار الشركة</h3>
+                    <p className="text-sm text-gray-500 mb-3">يظهر هذا الشعار في ترويسة الفواتير والتقارير.</p>
+                    <div className="flex gap-3">
+                      <button className="text-sm bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg font-medium shadow-sm transition-colors">
+                        رفع صورة جديدة
+                      </button>
+                      {settings.companyLogo && (
+                        <button className="text-sm text-red-600 hover:text-red-700 px-2">حذف</button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Form Inputs */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">اسم الشركة / المتجر</label>
+                    <input 
+                      type="text" 
+                      value={settings.companyName || ''}
+                      onChange={e => setSettings({...settings, companyName: e.target.value})}
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
+                      placeholder="مثال: مؤسسة الميزان التجارية"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">رقم الهاتف الرسمي</label>
+                    <input 
+                      type="text" 
+                      value={settings.companyPhone || ''}
+                      onChange={e => setSettings({...settings, companyPhone: e.target.value})}
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium text-gray-700">العنوان التفصيلي</label>
+                    <textarea 
+                      rows={2}
+                      value={settings.companyAddress || ''}
+                      onChange={e => setSettings({...settings, companyAddress: e.target.value})}
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none resize-none"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">الرقم الضريبي</label>
+                    <input 
+                      type="text" 
+                      value={settings.companyTaxNumber || ''}
+                      onChange={e => setSettings({...settings, companyTaxNumber: e.target.value})}
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* --- 2. PREFERENCES --- */}
+            {activeSection === 'preferences' && (
+               <div className="space-y-6 animate-in fade-in">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-gray-50 p-6 rounded-xl border border-gray-200">
+                        <div className="flex items-center gap-3 mb-4">
+                            <Globe className="w-5 h-5 text-purple-600" />
+                            <h3 className="font-semibold text-gray-900">اللغة والعملة</h3>
                         </div>
-                        <div>
-                            <h4 className="font-bold text-gray-800">Connection Status</h4>
-                            <p className="text-sm text-gray-500">
-                                {connectionStatus === 'SUCCESS' ? 'Connected to Supabase' : connectionStatus === 'ERROR' ? 'Connection Failed' : sysHealth ? 'Issues Detected' : 'Unknown Status'}
-                            </p>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-600 mb-1">لغة الواجهة</label>
+                                <select className="w-full p-2 rounded border bg-white">
+                                    <option value="ar">العربية</option>
+                                    <option value="en">English (Coming Soon)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-600 mb-1">العملة الافتراضية</label>
+                                <input 
+                                  value={settings.currency || 'ج.م'} 
+                                  onChange={e => setSettings({...settings, currency: e.target.value})}
+                                  className="w-full p-2 rounded border bg-white" 
+                                />
+                            </div>
                         </div>
+                    </div>
+
+                    <div className="bg-gray-50 p-6 rounded-xl border border-gray-200">
+                        <div className="flex items-center gap-3 mb-4">
+                            <Printer className="w-5 h-5 text-indigo-600" />
+                            <h3 className="font-semibold text-gray-900">إعدادات الطباعة</h3>
+                        </div>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-600 mb-1">حجم الورق الافتراضي</label>
+                                <div className="flex gap-2">
+                                    {['A4', 'A5', 'THERMAL'].map(size => (
+                                        <button 
+                                            key={size}
+                                            onClick={() => setSettings({...settings, printerPaperSize: size})}
+                                            className={`flex-1 py-2 px-3 rounded text-sm font-medium transition-colors ${settings.printerPaperSize === size ? 'bg-indigo-600 text-white shadow-md' : 'bg-white border text-gray-600 hover:bg-gray-50'}`}
+                                        >
+                                            {size}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                  </div>
+               </div>
+            )}
+
+            {/* --- 3. INVOICE --- */}
+            {activeSection === 'invoice' && (
+              <div className="animate-in fade-in">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {[
+                    {id: '1', name: 'الكلاسيكي', color: 'bg-blue-50 border-blue-200'},
+                    {id: '2', name: 'المودرن', color: 'bg-emerald-50 border-emerald-200'},
+                    {id: '3', name: 'الحراري', color: 'bg-orange-50 border-orange-200'}
+                  ].map((tpl) => (
+                    <div 
+                      key={tpl.id}
+                      onClick={() => setSettings({...settings, invoiceTemplate: tpl.id})}
+                      className={`relative cursor-pointer group rounded-xl border-2 transition-all duration-300 p-6 flex flex-col items-center gap-4 hover:shadow-lg
+                        ${settings.invoiceTemplate === tpl.id ? `border-blue-600 ring-2 ring-blue-100 ${tpl.color}` : 'border-gray-200 bg-white hover:border-gray-300'}
+                      `}
+                    >
+                      <div className="w-24 h-32 bg-white rounded shadow-sm border border-gray-200 flex flex-col p-2 gap-1 items-center justify-center opacity-60 group-hover:opacity-100 transition-opacity">
+                         {/* Mock Preview Lines */}
+                         <div className="w-full h-2 bg-gray-200 rounded-full" />
+                         <div className="w-2/3 h-2 bg-gray-200 rounded-full" />
+                         <div className="w-full mt-4 h-12 bg-gray-100 rounded" />
+                      </div>
+                      <div className="text-center">
+                        <h4 className={`font-bold ${settings.invoiceTemplate === tpl.id ? 'text-blue-800' : 'text-gray-600'}`}>{tpl.name}</h4>
+                        {settings.invoiceTemplate === tpl.id && <span className="text-xs text-blue-600 font-medium">نشط حالياً</span>}
+                      </div>
+                      
+                      {settings.invoiceTemplate === tpl.id && (
+                        <div className="absolute top-3 right-3 bg-blue-600 text-white p-1 rounded-full">
+                          <CheckCircle2 className="w-4 h-4" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* --- 4. DATA MANAGEMENT --- */}
+            {activeSection === 'data' && (
+              <div className="space-y-6 animate-in fade-in">
+                
+                <div className="bg-white border border-gray-200 rounded-xl p-6 flex items-center justify-between shadow-sm">
+                   <div className="flex gap-4 items-center">
+                      <div className="p-3 bg-green-100 text-green-700 rounded-lg"><Download className="w-6 h-6" /></div>
+                      <div>
+                        <h4 className="font-bold text-gray-900">تصدير قاعدة البيانات (Backup)</h4>
+                        <p className="text-sm text-gray-500">حفظ نسخة احتياطية من جميع بياناتك محلياً.</p>
+                      </div>
+                   </div>
+                   <button 
+                     onClick={async () => {
+                        const data = await db.exportDatabase();
+                        const blob = new Blob([data], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `mizan_backup_${new Date().toISOString().split('T')[0]}.json`;
+                        a.click();
+                     }}
+                     className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 font-medium"
+                   >
+                     تحميل النسخة
+                   </button>
+                </div>
+
+                <div className="bg-white border border-gray-200 rounded-xl p-6 flex items-center justify-between shadow-sm">
+                   <div className="flex gap-4 items-center">
+                      <div className="p-3 bg-blue-100 text-blue-700 rounded-lg"><Upload className="w-6 h-6" /></div>
+                      <div>
+                        <h4 className="font-bold text-gray-900">استعادة البيانات (Restore)</h4>
+                        <p className="text-sm text-gray-500">استرجاع البيانات من ملف JSON سابق.</p>
+                      </div>
+                   </div>
+                   <label className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 font-medium cursor-pointer">
+                     رفع ملف
+                     <input type="file" className="hidden" onChange={(e) => {
+                        if(e.target.files && e.target.files[0]) {
+                            const reader = new FileReader();
+                            reader.onload = async (ev) => {
+                                if(confirm("سيتم استبدال جميع البيانات الحالية. هل أنت متأكد؟")) {
+                                    await db.importDatabase(ev.target?.result as string);
+                                    window.location.reload();
+                                }
+                            };
+                            reader.readAsText(e.target.files[0]);
+                        }
+                     }} />
+                   </label>
+                </div>
+
+                <div className="mt-8 pt-8 border-t border-red-100">
+                  <h3 className="text-red-700 font-bold mb-4 flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5" /> منطقة الخطر
+                  </h3>
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div>
+                      <h4 className="font-bold text-red-900">تصفير النظام بالكامل</h4>
+                      <p className="text-sm text-red-700 mt-1">سيتم حذف جميع الفواتير، المنتجات، والعملاء من هذا الجهاز. لا يمكن التراجع عن هذا الإجراء.</p>
                     </div>
                     <button 
-                        onClick={handleTestConnection} 
-                        disabled={connectionStatus === 'CHECKING'}
-                        className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50"
+                       onClick={async () => {
+                           if(confirm("تحذير نهائي: هل أنت متأكد من حذف كل شيء؟")) {
+                               await db.resetDatabase();
+                           }
+                       }}
+                       className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-bold shadow-sm whitespace-nowrap"
                     >
-                        {connectionStatus === 'CHECKING' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                        Test Connection
+                      <Trash2 className="w-4 h-4 inline-block ml-2" />
+                      حذف كل البيانات
                     </button>
+                  </div>
                 </div>
+              </div>
+            )}
 
-                {/* Setup Instructions */}
-                <div className={`border rounded-lg p-4 flex items-start gap-3 ${sysHealth ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
-                    <Shield className={`w-6 h-6 shrink-0 mt-1 ${sysHealth ? 'text-red-600' : 'text-blue-600'}`} />
-                    <div>
-                        <h4 className={`font-bold ${sysHealth ? 'text-red-800' : 'text-blue-800'}`}>
-                            {sysHealth === 'PERMISSION_DENIED' ? 'Fix Permission Errors (403)' : 'Database Initialization & Auth Fixes'}
-                        </h4>
-                        <p className={`text-sm mt-1 ${sysHealth ? 'text-red-700' : 'text-blue-700'}`}>
-                            {sysHealth 
-                                ? 'The system is unable to sync because policies are blocking access. Run the SQL script below to fix permissions.' 
-                                : 'Copy this script and run it in the Supabase SQL Editor. It sets up the schema and fixes "Error 500" when adding users.'}
-                        </p>
-                    </div>
-                </div>
+            {/* --- 5. SYSTEM & CLOUD --- */}
+            {activeSection === 'system' && (
+               <div className="space-y-6 animate-in fade-in">
+                  
+                  {/* Status Card */}
+                  <div className={`rounded-xl border p-6 flex items-center justify-between
+                      ${connectionStatus === 'SUCCESS' ? 'bg-green-50 border-green-200' : 
+                        connectionStatus === 'ERROR' ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className="flex items-center gap-4">
+                          <div className={`p-3 rounded-full ${connectionStatus === 'SUCCESS' ? 'bg-green-200 text-green-700' : 'bg-white text-gray-500'}`}>
+                              <Wifi className="w-6 h-6" />
+                          </div>
+                          <div>
+                              <h3 className="font-bold text-gray-900">حالة الاتصال بالسيرفر</h3>
+                              <p className="text-sm text-gray-600">
+                                  {connectionStatus === 'SUCCESS' ? 'متصل بنجاح بقاعدة البيانات' : 
+                                   connectionStatus === 'ERROR' ? 'فشل الاتصال - تأكد من الإنترنت أو الإعدادات' : 'لم يتم التحقق بعد'}
+                              </p>
+                          </div>
+                      </div>
+                      <button onClick={handleTestConnection} disabled={connectionStatus === 'CHECKING'} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-bold shadow-sm hover:bg-gray-50">
+                          {connectionStatus === 'CHECKING' ? 'جاري الفحص...' : 'فحص الاتصال'}
+                      </button>
+                  </div>
 
-                {/* SQL Code Block */}
-                <div className="relative">
-                    <div className="absolute top-2 right-2 z-10">
-                        <button onClick={copySQL} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded flex items-center gap-2 shadow-lg hover:scale-105 transition-transform">
-                            <Copy className="w-3 h-3" /> Copy SQL Script (v4)
-                        </button>
-                    </div>
-                    <pre className="bg-slate-900 text-slate-300 p-4 rounded-xl text-xs overflow-x-auto font-mono h-96 border border-slate-700 shadow-inner relative">
-                        {SQL_SCRIPT}
-                    </pre>
-                </div>
-            </div>
-        )}
+                  {/* Fix Script Widget */}
+                  <div className="bg-slate-900 rounded-xl overflow-hidden text-slate-300 shadow-xl">
+                      <div className="bg-slate-800 px-6 py-4 flex justify-between items-center border-b border-slate-700">
+                          <div className="flex items-center gap-3">
+                              <Terminal className="w-5 h-5 text-emerald-400" />
+                              <span className="font-mono font-bold text-white">System Repair Script (v4)</span>
+                          </div>
+                          <button 
+                            onClick={() => {
+                                navigator.clipboard.writeText(SQL_SCRIPT);
+                                alert("تم نسخ الكود! توجه إلى Supabase > SQL Editor لتنفيذه.");
+                            }}
+                            className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded flex items-center gap-2 transition-colors"
+                          >
+                              <Copy className="w-3 h-3" /> نسخ الكود
+                          </button>
+                      </div>
+                      <div className="p-6">
+                          <p className="text-sm text-slate-400 mb-4">
+                              استخدم هذا السكربت لإصلاح مشاكل الصلاحيات (Permission Denied) أو الجداول المفقودة.
+                              <br />
+                              <span className="text-yellow-500 font-bold">تنبيه:</span> سيقوم هذا السكربت بإعادة هيكلة قاعدة البيانات السحابية.
+                          </p>
+                          <div className="relative group">
+                              <pre className="h-48 overflow-y-auto text-xs font-mono bg-black/30 p-4 rounded border border-slate-700">
+                                  {SQL_SCRIPT}
+                              </pre>
+                              <div className="absolute inset-0 bg-gradient-to-t from-slate-900/50 to-transparent pointer-events-none" />
+                          </div>
+                      </div>
+                  </div>
 
-        {activeTab === 'general' && (
-            <div className="space-y-6 animate-in fade-in">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2 border-b pb-2">
-                    <Building2 className="w-5 h-5" /> {t('set.company_info')}
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">{t('set.company_name')}</label>
-                        <input className="w-full border p-2 rounded-lg" value={settings.companyName || ''} onChange={e => setSettings({...settings, companyName: e.target.value})} />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">{t('set.phone')}</label>
-                        <input className="w-full border p-2 rounded-lg" value={settings.companyPhone || ''} onChange={e => setSettings({...settings, companyPhone: e.target.value})} />
-                    </div>
-                </div>
-                
-                <div className="mt-8 border-t pt-6">
-                    <h3 className="font-bold text-gray-800 mb-4">Backup & Restore</h3>
-                    <div className="flex gap-4">
-                        <button onClick={handleBackup} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2">
-                            <Download className="w-4 h-4" /> Backup Data
-                        </button>
-                        <label className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2 cursor-pointer">
-                            <Upload className="w-4 h-4" /> Restore Data
-                            <input type="file" className="hidden" onChange={handleRestore} />
-                        </label>
-                    </div>
-                </div>
+               </div>
+            )}
 
-                <div className="flex justify-end pt-4">
-                    <button onClick={handleSaveSettings} className="bg-blue-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 shadow-sm hover:bg-blue-700"><Save className="w-4 h-4" /> {t('set.save')}</button>
-                </div>
-            </div>
-        )}
-
-        {activeTab === 'invoice' && (
-             <div className="space-y-6 animate-in fade-in">
-                 <h3 className="font-bold text-gray-800 border-b pb-2">Invoice Template</h3>
-                 <div className="flex gap-4">
-                     {[1,2,3].map(i => (
-                         <div key={i} onClick={() => setSettings({...settings, invoiceTemplate: String(i)})} className={`border-2 p-4 rounded cursor-pointer ${settings.invoiceTemplate == i ? 'border-blue-500 bg-blue-50' : ''}`}>
-                             Template {i}
-                         </div>
-                     ))}
-                 </div>
-                 <div className="flex justify-end pt-4"><button onClick={handleSaveSettings} className="bg-blue-600 text-white px-6 py-2 rounded-lg"><Save className="w-4 h-4" /> Save</button></div>
-             </div>
-        )}
-      </div>
+          </div>
+        </div>
+      </main>
     </div>
   );
 }

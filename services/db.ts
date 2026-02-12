@@ -1,6 +1,4 @@
-
-import { Dexie } from 'dexie';
-import type { Table } from 'dexie';
+import Dexie, { Table } from 'dexie';
 import {
   Product,
   Batch,
@@ -51,7 +49,6 @@ const DEFAULT_SETTINGS: SystemSettings = {
 };
 
 class MizanDatabase extends Dexie {
-    // Explicit Table Definitions
     products!: Table<Product, string>;
     batches!: Table<Batch, string>;
     customers!: Table<Customer, string>;
@@ -68,6 +65,7 @@ class MizanDatabase extends Dexie {
 
     constructor() {
         super('MizanOnlineDB');
+        // Fix: Cast this to any to access version
         (this as any).version(1).stores({
             products: 'id, code, name',
             batches: 'id, product_id, warehouse_id, batch_number, status',
@@ -83,6 +81,7 @@ class MizanDatabase extends Dexie {
             settings: 'id',
             queue: '++id, status, client_transaction_id'
         });
+        // Fix: Cast this to any to access on
         (this as any).on('populate', () => this.seedData());
     }
 
@@ -161,6 +160,7 @@ class MizanDatabase extends Dexie {
     }
 
     async createInvoice(customerId: string, items: CartItem[], cashPaid: number, isReturn: boolean = false): Promise<{ success: boolean; message: string; id?: string }> {
+        // Fix: Cast this to any to access transaction
         return (this as any).transaction('rw', [this.invoices, this.batches, this.customers, this.cashTransactions, this.activityLogs, this.queue], async () => {
             const customer = await this.customers.get(customerId);
             if (!customer) throw new Error("Customer not found");
@@ -220,6 +220,7 @@ class MizanDatabase extends Dexie {
     }
 
     async createPurchaseInvoice(supplierId: string, items: PurchaseItem[], paidAmount: number, isReturn: boolean): Promise<{ success: boolean; message: string }> {
+        // Fix: Cast this to any to access transaction
         return (this as any).transaction('rw', [this.purchaseInvoices, this.batches, this.suppliers, this.cashTransactions, this.activityLogs, this.queue], async () => {
             const supplier = await this.suppliers.get(supplierId);
             if (!supplier) throw new Error("Supplier not found");
@@ -285,6 +286,7 @@ class MizanDatabase extends Dexie {
     }
 
     async adjustStock(batchId: string, adjustmentQty: number, reason: string): Promise<{ success: boolean, message: string }> {
+        // Fix: Cast this to any to access transaction
         return (this as any).transaction('rw', [this.batches, this.activityLogs, this.queue], async () => {
             const batch = await this.batches.get(batchId);
             if (!batch) throw new Error("Batch not found");
@@ -299,6 +301,7 @@ class MizanDatabase extends Dexie {
     }
 
     async transferStock(batchId: string, targetWarehouseId: string, quantity: number): Promise<{ success: boolean; message: string }> {
+        // Fix: Cast this to any to access transaction
         return (this as any).transaction('rw', [this.batches, this.activityLogs, this.queue], async () => {
             const sourceBatch = await this.batches.get(batchId);
             if (!sourceBatch) throw new Error("Source Batch Not Found");
@@ -324,6 +327,7 @@ class MizanDatabase extends Dexie {
     }
 
     async addDeal(d: Partial<Deal>, initialAmount: number) {
+        // Fix: Cast this to any to access transaction
         return (this as any).transaction('rw', [this.deals, this.cashTransactions, this.activityLogs, this.queue], async () => {
              const id = crypto.randomUUID();
              const cycle: DealCycle = {
@@ -359,6 +363,7 @@ class MizanDatabase extends Dexie {
     }
     
     async updateDeal(id: string, updates: any) {
+        // Fix: Cast this to any to access transaction
         return (this as any).transaction('rw', [this.deals, this.activityLogs, this.queue], async () => {
             const deal = await this.deals.get(id);
             if (!deal) throw new Error("Deal not found");
@@ -378,6 +383,7 @@ class MizanDatabase extends Dexie {
     }
 
     async renewDeal(id: string, amount: number, targets: DealTarget[]) {
+        // Fix: Cast this to any to access transaction
         return (this as any).transaction('rw', [this.deals, this.cashTransactions, this.activityLogs, this.queue], async () => {
             const deal = await this.deals.get(id);
             if (!deal) throw new Error("Deal not found");
@@ -414,6 +420,7 @@ class MizanDatabase extends Dexie {
     }
 
     async updateCustomer(id: string, updates: Partial<Customer>) {
+        // Fix: Cast this to any to access transaction
         await (this as any).transaction('rw', [this.customers, this.queue], async () => {
             const c = await this.customers.get(id);
             if(c && updates.opening_balance !== undefined && updates.opening_balance !== c.opening_balance) {
@@ -436,6 +443,7 @@ class MizanDatabase extends Dexie {
     }
     
     async addProduct(p: any, b: any) {
+        // Fix: Cast this to any to access transaction
         return (this as any).transaction('rw', [this.products, this.batches, this.queue], async () => {
             const pid = crypto.randomUUID();
             const product = { ...p, id: pid };
@@ -450,6 +458,7 @@ class MizanDatabase extends Dexie {
     }
 
     async addCashTransaction(tx: Omit<CashTransaction, 'id'>) {
+        // Fix: Cast this to any to access transaction
         await (this as any).transaction('rw', [this.cashTransactions, this.customers, this.suppliers, this.queue], async () => {
             await this.addCashTransactionInternal(tx);
         });
@@ -492,6 +501,7 @@ class MizanDatabase extends Dexie {
         const pattern = `${prefix}${year}${month}-`;
         
         // OPTIMIZED: Use index query instead of toArray()
+        // Fix: Cast this to any to access table method
         const lastRecord = await (this as any).table(table as string)
             .where(key)
             .startsWith(pattern)
@@ -511,11 +521,16 @@ class MizanDatabase extends Dexie {
         return `${pattern}${nextSeq}`;
     }
 
-    async resetDatabase() { await (this as any).delete(); window.location.reload(); }
+    async resetDatabase() { 
+        // Fix: Cast this to any to access delete
+        await (this as any).delete(); 
+        window.location.reload(); 
+    }
     async deleteInvoice(id: string) { await this.invoices.delete(id); }
     async deletePurchaseInvoice(id: string) { await this.purchaseInvoices.delete(id); }
     
     async deleteProduct(id: string) { 
+        // Fix: Cast this to any to access transaction
         await (this as any).transaction('rw', [this.products, this.batches, this.queue], async () => {
             await this.products.delete(id);
             await this.batches.where('product_id').equals(id).delete();
@@ -553,6 +568,7 @@ class MizanDatabase extends Dexie {
     
     async exportDatabase() {
         const allData: any = {};
+        // Fix: Cast this to any to access tables
         for(const table of (this as any).tables) allData[table.name] = await table.toArray();
         return JSON.stringify(allData);
     }
@@ -560,6 +576,7 @@ class MizanDatabase extends Dexie {
     async importDatabase(json: string) {
         try {
             const data = JSON.parse(json);
+            // Fix: Cast this to any to access transaction and tables
             await (this as any).transaction('rw', (this as any).tables, async () => {
                 for(const table of (this as any).tables) {
                     if(data[table.name]) {
