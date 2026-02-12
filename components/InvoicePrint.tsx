@@ -59,8 +59,8 @@ export default function InvoicePrint() {
          {/* Right: Invoice Info & Customer */}
          <div className="text-right w-1/3">
             {/* Invoice Meta */}
-            <div className="mb-3">
-                <p className="font-bold text-slate-800 text-sm mb-1">رقم الفاتورة: <span className="font-mono text-base">{invoice.invoice_number}</span></p>
+            <div className="mb-2 space-y-1">
+                <p className="font-bold text-slate-800 text-sm">رقم الفاتورة: <span className="font-mono text-base">{invoice.invoice_number}</span></p>
                 <p className="font-bold text-slate-600 text-[11px]">التاريخ: <span className="font-mono">{new Date(invoice.date).toLocaleDateString('en-GB')}</span></p>
             </div>
             
@@ -81,7 +81,7 @@ export default function InvoicePrint() {
 
          {/* Left: Company */}
          <div className="text-left w-1/3 pl-2">
-            <h3 className="font-bold text-base text-slate-900 whitespace-nowrap overflow-hidden text-ellipsis" title={settings?.companyName}>{settings?.companyName}</h3>
+            <h3 className="font-bold text-base text-slate-900 leading-snug" title={settings?.companyName}>{settings?.companyName}</h3>
             <div className="text-slate-600 space-y-1 mt-2 text-[10px]">
                 {settings?.companyTaxNumber && (
                     <p className="flex justify-end gap-2">
