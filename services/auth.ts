@@ -33,16 +33,32 @@ export const authService = {
     if (error) throw error;
     if (!data.user) throw new Error("No user returned");
 
-    // We force everyone to have the SAME company_id locally.
-    // This allows the app to treat all data as "mine" (since the app logic filters by company_id).
+    // Attempt to fetch profile for RBAC
+    let profile = null;
+    try {
+        const { data: profileData } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', data.user.id)
+            .single();
+        profile = profileData;
+    } catch (e) {
+        console.warn("Could not fetch profile, falling back to default user role.", e);
+    }
+
     const userObj: User = {
         id: data.user.id,
         username: email,
-        name: email.split('@')[0],
-        role: 'ADMIN',
+        name: profile?.full_name || email.split('@')[0],
+        role: (profile?.role as any) || 'USER',
         company_id: SHARED_COMPANY_ID, 
-        permissions: ALL_PERMISSIONS_IDS
+        permissions: profile?.permissions || [] 
     };
+
+    // If Admin, ensure full permissions locally as a fail-safe
+    if (userObj.role === 'ADMIN') {
+        userObj.permissions = ALL_PERMISSIONS_IDS;
+    }
 
     authService.saveUserToStorage(userObj);
     return userObj;
@@ -66,7 +82,10 @@ export const authService = {
   },
 
   hasPermission: (permissionId: string): boolean => {
-      return true; // Full access for single tenant mode
+      const user = authService.getCurrentUser();
+      if (!user) return false;
+      if (user.role === 'ADMIN') return true;
+      return (user.permissions || []).includes(permissionId);
   },
 
   saveUserToStorage: (user: User) => {
@@ -78,7 +97,7 @@ export const authService = {
   },
 
   getUsers: (): any[] => {
-      return []; // Admin manages users via Supabase Dashboard
+      return []; // Admin manages users via Supabase Dashboard or UsersManager
   },
   
   saveUser: (user: any) => {},

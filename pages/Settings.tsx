@@ -7,13 +7,14 @@ import {
   Wifi, Shield, Database, Download, Upload, 
   Trash2, Monitor, Printer, Globe, CreditCard, 
   CheckCircle2, AlertTriangle, RefreshCw, Copy, 
-  ChevronRight, LayoutDashboard, Terminal, FileSpreadsheet, AlertCircle
+  ChevronRight, LayoutDashboard, Terminal, FileSpreadsheet, AlertCircle, Users
 } from 'lucide-react';
 import { DataImport } from '../components/DataImport';
+import { UsersManager } from '../components/UsersManager';
 
 // --- SQL SCRIPT (Preserved for System Health) ---
 const SQL_SCRIPT = `
--- ⚡ MIZAN ONLINE: ULTIMATE FIX SCRIPT (v4 - Atomic Transactions)
+-- ⚡ MIZAN ONLINE: ULTIMATE FIX SCRIPT (v4.1 - Atomic Transactions + Users)
 -- Run this in Supabase SQL Editor.
 
 -- 1. CLEANUP
@@ -22,25 +23,25 @@ DROP FUNCTION IF EXISTS public.handle_new_user();
 DROP FUNCTION IF EXISTS public.handle_new_user CASCADE;
 DROP FUNCTION IF EXISTS public.upsert_full_invoice;
 
-DROP TABLE IF EXISTS public.activity_logs CASCADE;
-DROP TABLE IF EXISTS public.deals CASCADE;
-DROP TABLE IF EXISTS public.cash_transactions CASCADE;
-DROP TABLE IF EXISTS public.purchase_invoices CASCADE;
-DROP TABLE IF EXISTS public.invoice_items CASCADE;
-DROP TABLE IF EXISTS public.invoices CASCADE;
-DROP TABLE IF EXISTS public.batches CASCADE;
-DROP TABLE IF EXISTS public.products CASCADE;
-DROP TABLE IF EXISTS public.customers CASCADE;
-DROP TABLE IF EXISTS public.suppliers CASCADE;
-DROP TABLE IF EXISTS public.representatives CASCADE;
-DROP TABLE IF EXISTS public.warehouses CASCADE;
-DROP TABLE IF EXISTS public.settings CASCADE;
+-- DROP TABLE IF EXISTS public.activity_logs CASCADE; -- Optional: Keep logs
+-- DROP TABLE IF EXISTS public.profiles CASCADE; -- Optional: Keep profiles
 
 -- 2. EXTENSIONS
 create extension if not exists moddatetime schema extensions;
 
 -- 3. TABLES CREATION
-create table public.settings (
+
+-- PROFILES (New for RBAC)
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id uuid REFERENCES auth.users ON DELETE CASCADE PRIMARY KEY,
+  email text,
+  full_name text,
+  role text DEFAULT 'USER', -- ADMIN, MANAGER, CASHIER
+  permissions text[], -- Array of permission strings
+  created_at timestamptz DEFAULT now()
+);
+
+create table if not exists public.settings (
   company_id uuid not null primary key,
   company_name text,
   company_address text,
@@ -52,7 +53,7 @@ create table public.settings (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
-create table public.warehouses (
+create table if not exists public.warehouses (
   id uuid primary key,
   company_id uuid not null,
   name text,
@@ -60,7 +61,7 @@ create table public.warehouses (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
-create table public.representatives (
+create table if not exists public.representatives (
   id uuid primary key,
   company_id uuid not null,
   code text,
@@ -69,7 +70,7 @@ create table public.representatives (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
-create table public.suppliers (
+create table if not exists public.suppliers (
   id uuid primary key,
   company_id uuid not null,
   code text,
@@ -80,7 +81,7 @@ create table public.suppliers (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
-create table public.customers (
+create table if not exists public.customers (
   id uuid primary key,
   company_id uuid not null,
   representative_code text,
@@ -93,7 +94,7 @@ create table public.customers (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
-create table public.products (
+create table if not exists public.products (
   id text not null,
   company_id uuid not null,
   code text,
@@ -102,7 +103,7 @@ create table public.products (
   primary key (id, company_id)
 );
 
-create table public.batches (
+create table if not exists public.batches (
   id uuid primary key,
   company_id uuid not null,
   product_id text,
@@ -116,7 +117,7 @@ create table public.batches (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
-create table public.invoices (
+create table if not exists public.invoices (
   id uuid primary key,
   company_id uuid not null,
   invoice_number text,
@@ -130,7 +131,7 @@ create table public.invoices (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
-create table public.invoice_items (
+create table if not exists public.invoice_items (
   id uuid primary key,
   company_id uuid not null,
   invoice_id uuid references public.invoices(id) on delete cascade,
@@ -143,7 +144,7 @@ create table public.invoice_items (
   line_total numeric
 );
 
-create table public.purchase_invoices (
+create table if not exists public.purchase_invoices (
   id uuid primary key,
   company_id uuid not null,
   invoice_number text,
@@ -156,7 +157,7 @@ create table public.purchase_invoices (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
-create table public.cash_transactions (
+create table if not exists public.cash_transactions (
   id text not null,
   company_id uuid not null,
   type text,
@@ -170,7 +171,7 @@ create table public.cash_transactions (
   primary key (id, company_id)
 );
 
-create table public.deals (
+create table if not exists public.deals (
   id uuid primary key,
   company_id uuid not null,
   doctor_name text,
@@ -180,7 +181,7 @@ create table public.deals (
   created_at timestamp with time zone
 );
 
-create table public.activity_logs (
+create table if not exists public.activity_logs (
   id uuid primary key,
   company_id uuid not null,
   user_id text,
@@ -205,6 +206,7 @@ alter table purchase_invoices enable row level security;
 alter table cash_transactions enable row level security;
 alter table deals enable row level security;
 alter table activity_logs enable row level security;
+alter table profiles enable row level security;
 
 create policy "Enable All" on settings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 create policy "Enable All" on warehouses for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
@@ -220,16 +222,19 @@ create policy "Enable All" on cash_transactions for all using (auth.role() = 'au
 create policy "Enable All" on deals for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 create policy "Enable All" on activity_logs for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
+-- Policies for Profiles (Admins view all, Users view self)
+CREATE POLICY "Enable Read" ON profiles FOR SELECT USING (auth.role() = 'authenticated');
+CREATE POLICY "Enable Update" ON profiles FOR UPDATE USING (auth.role() = 'authenticated');
+CREATE POLICY "Enable Insert" ON profiles FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
 
 -- 5. ATOMIC INVOICE UPSERT FUNCTION (RPC)
--- This ensures invoice header + items are saved together or failed together.
 CREATE OR REPLACE FUNCTION upsert_full_invoice(invoice_data jsonb, items_data jsonb)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
-  -- 1. Upsert Header
   INSERT INTO invoices (
     id, company_id, invoice_number, customer_id, date, 
     total_before_discount, total_discount, net_total, 
@@ -255,10 +260,8 @@ BEGIN
     payment_status = EXCLUDED.payment_status,
     updated_at = now();
 
-  -- 2. Delete existing items for this invoice (to handle updates cleanly)
   DELETE FROM invoice_items WHERE invoice_id = (invoice_data->>'id')::uuid;
 
-  -- 3. Insert new items from JSON array
   IF jsonb_array_length(items_data) > 0 THEN
     INSERT INTO invoice_items (
       id, company_id, invoice_id, product_id, batch_id, 
@@ -280,7 +283,25 @@ BEGIN
 END;
 $$;
 
--- 6. TRIGGERS
+-- 6. USER CREATION TRIGGER (Auto Profile)
+-- Automatically creates a profile entry when a user signs up via Auth
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO public.profiles (id, email, full_name, role, permissions)
+  VALUES (new.id, new.email, new.raw_user_meta_data->>'full_name', 'USER', '{}');
+  RETURN new;
+END;
+$$;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+-- 7. TRIGGERS (Updated At)
 create trigger handle_updated_at before update on settings for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on warehouses for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on representatives for each row execute procedure moddatetime (updated_at);
@@ -292,7 +313,7 @@ create trigger handle_updated_at before update on invoices for each row execute 
 create trigger handle_updated_at before update on purchase_invoices for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on cash_transactions for each row execute procedure moddatetime (updated_at);
 
--- 7. STORAGE
+-- 8. STORAGE
 insert into storage.buckets (id, name, public) values ('logos', 'logos', true) on conflict (id) do nothing;
 drop policy if exists "Logos Public" on storage.objects;
 drop policy if exists "Logos Upload" on storage.objects;
@@ -301,7 +322,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
 `;
 
 // Types for UI Sections
-type SettingsSection = 'general' | 'preferences' | 'invoice' | 'data' | 'system' | 'import';
+type SettingsSection = 'general' | 'preferences' | 'invoice' | 'data' | 'system' | 'import' | 'users';
 
 export default function Settings() {
   const [activeSection, setActiveSection] = useState<SettingsSection>('general');
@@ -390,6 +411,7 @@ export default function Settings() {
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2 mt-2">عام</div>
             <SidebarItem id="general" icon={Building2} label="معلومات الشركة" />
             <SidebarItem id="preferences" icon={Monitor} label="المظهر واللغة" />
+            <SidebarItem id="users" icon={Users} label="المستخدمين والصلاحيات" />
             
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2 mt-6">المبيعات</div>
             <SidebarItem id="invoice" icon={FileText} label="قوالب الفواتير" />
@@ -414,6 +436,7 @@ export default function Settings() {
               <h1 className="text-2xl font-bold text-gray-900">
                 {activeSection === 'general' && 'معلومات الشركة'}
                 {activeSection === 'preferences' && 'تفضيلات النظام'}
+                {activeSection === 'users' && 'المستخدمين والصلاحيات'}
                 {activeSection === 'invoice' && 'إعدادات الفواتير'}
                 {activeSection === 'data' && 'إدارة البيانات'}
                 {activeSection === 'import' && 'استيراد البيانات'}
@@ -422,7 +445,7 @@ export default function Settings() {
               <p className="text-sm text-gray-500 mt-1">قم بتعديل وتخصيص إعدادات التطبيق الخاصة بك</p>
             </div>
             
-            {activeSection !== 'system' && activeSection !== 'data' && activeSection !== 'import' && (
+            {activeSection !== 'system' && activeSection !== 'data' && activeSection !== 'import' && activeSection !== 'users' && (
               <button 
                 onClick={handleSave} 
                 disabled={loading}
@@ -440,7 +463,6 @@ export default function Settings() {
             {/* --- 1. GENERAL --- */}
             {activeSection === 'general' && (
               <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                
                 {/* Logo Section */}
                 <div className="flex items-start gap-6 pb-8 border-b border-gray-100">
                   <div className="w-24 h-24 bg-gray-100 rounded-2xl flex items-center justify-center border-2 border-dashed border-gray-300 text-gray-400">
@@ -560,6 +582,9 @@ export default function Settings() {
                   </div>
                </div>
             )}
+
+            {/* --- 2.5 USERS --- */}
+            {activeSection === 'users' && <UsersManager />}
 
             {/* --- 3. INVOICE --- */}
             {activeSection === 'invoice' && (
@@ -725,7 +750,7 @@ export default function Settings() {
                       <div className="bg-slate-800 px-6 py-4 flex justify-between items-center border-b border-slate-700">
                           <div className="flex items-center gap-3">
                               <Terminal className="w-5 h-5 text-emerald-400" />
-                              <span className="font-mono font-bold text-white">System Repair Script (v4)</span>
+                              <span className="font-mono font-bold text-white">System Repair Script (v4.1)</span>
                           </div>
                           <button 
                             onClick={() => {
