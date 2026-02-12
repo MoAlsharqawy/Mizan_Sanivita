@@ -1,9 +1,10 @@
 
-import React, { Suspense, lazy } from 'react';
+import React, { Suspense, lazy, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Loader2 } from 'lucide-react';
+import { db } from './services/db';
 
 // Lazy Load Pages
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -32,6 +33,37 @@ const PageLoader = () => (
 );
 
 const App: React.FC = () => {
+  
+  // Browser Close Protection
+  useEffect(() => {
+    const handleBeforeUnload = async (e: BeforeUnloadEvent) => {
+        // Since DB access is async, we can't block immediately with exact count here reliably in all browsers.
+        // However, we can check localStorage if we were setting a flag there.
+        // For now, we will add a check if there is data in queue.
+        
+        // Note: Browsers like Chrome require user interaction on page to allow this.
+        // And we cannot await db call inside the event handler synchronously.
+        // So we just set a generic warning if user tries to close.
+        // A more robust way is to maintain a 'dirty' flag in localStorage in sync.ts
+    };
+
+    // More aggressive protection: poll count and set window property
+    const interval = setInterval(async () => {
+       const count = await db.queue.where('status').equals('PENDING').count();
+       if (count > 0) {
+           window.onbeforeunload = (e) => {
+               e.preventDefault();
+               e.returnValue = 'You have unsaved data syncing to cloud. Are you sure you want to exit?';
+               return e.returnValue;
+           };
+       } else {
+           window.onbeforeunload = null;
+       }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <Router>
       <Routes>

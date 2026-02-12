@@ -6,6 +6,7 @@ import { t, isRTL } from '../utils/t';
 import { authService } from '../services/auth';
 import { syncService } from '../services/sync';
 import { db } from '../services/db';
+import { ExitApp } from './ExitApp';
 
 interface LayoutProps {
     children?: React.ReactNode;
@@ -228,12 +229,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                     <p className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">{user?.role === 'ADMIN' ? 'Manager' : 'Employee'}</p>
                 </div>
             </div>
-            <button 
-                onClick={authService.logout}
-                className="w-full flex items-center justify-center gap-2 py-2 text-xs font-bold text-red-400 bg-red-400/10 hover:bg-red-400/20 rounded-lg transition-colors"
-            >
-                <LogOut className="w-3.5 h-3.5" /> Logout
-            </button>
+            
+            {/* New Exit App Component */}
+            <ExitApp />
         </div>
       </aside>
 
