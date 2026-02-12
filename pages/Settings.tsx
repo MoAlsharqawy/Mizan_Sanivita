@@ -20,17 +20,17 @@ export default function Settings() {
       }
   }, []);
 
-  // --- FINAL PRODUCTION SQL SCRIPT (v3 - Fixes 403 Permission Denied) ---
+  // --- FINAL PRODUCTION SQL SCRIPT (v4 - Added Atomic Transaction RPC) ---
   const SQL_SCRIPT = `
--- ⚡ MIZAN ONLINE: ULTIMATE FIX SCRIPT (v3 - The Permission Hammer)
--- Run this in Supabase SQL Editor to fix 403 Errors.
+-- ⚡ MIZAN ONLINE: ULTIMATE FIX SCRIPT (v4 - Atomic Transactions)
+-- Run this in Supabase SQL Editor.
 
--- 1. CLEANUP (Drop triggers first to avoid dependency errors)
+-- 1. CLEANUP
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 DROP FUNCTION IF EXISTS public.handle_new_user();
 DROP FUNCTION IF EXISTS public.handle_new_user CASCADE;
+DROP FUNCTION IF EXISTS public.upsert_full_invoice;
 
--- Drop tables with CASCADE to remove dependent views/constraints
 DROP TABLE IF EXISTS public.activity_logs CASCADE;
 DROP TABLE IF EXISTS public.deals CASCADE;
 DROP TABLE IF EXISTS public.cash_transactions CASCADE;
@@ -200,8 +200,7 @@ create table public.activity_logs (
   timestamp timestamp with time zone
 );
 
--- 4. SECURITY & PERMISSIONS (THE FIX FOR 403)
--- Enable RLS
+-- 4. SECURITY & PERMISSIONS
 alter table settings enable row level security;
 alter table warehouses enable row level security;
 alter table representatives enable row level security;
@@ -216,7 +215,6 @@ alter table cash_transactions enable row level security;
 alter table deals enable row level security;
 alter table activity_logs enable row level security;
 
--- Create Open Policies (Authenticated users can do anything)
 create policy "Enable All" on settings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 create policy "Enable All" on warehouses for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 create policy "Enable All" on representatives for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
@@ -231,12 +229,67 @@ create policy "Enable All" on cash_transactions for all using (auth.role() = 'au
 create policy "Enable All" on deals for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 create policy "Enable All" on activity_logs for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
--- GRANT PERMISSIONS (Explicitly allow 'authenticated' role to use tables)
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
 
--- 5. TRIGGERS
+-- 5. ATOMIC INVOICE UPSERT FUNCTION (RPC)
+-- This ensures invoice header + items are saved together or failed together.
+CREATE OR REPLACE FUNCTION upsert_full_invoice(invoice_data jsonb, items_data jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  -- 1. Upsert Header
+  INSERT INTO invoices (
+    id, company_id, invoice_number, customer_id, date, 
+    total_before_discount, total_discount, net_total, 
+    payment_status, type, updated_at
+  ) VALUES (
+    (invoice_data->>'id')::uuid,
+    (invoice_data->>'company_id')::uuid,
+    invoice_data->>'invoice_number',
+    (invoice_data->>'customer_id')::uuid,
+    (invoice_data->>'date')::timestamptz,
+    (invoice_data->>'total_before_discount')::numeric,
+    (invoice_data->>'total_discount')::numeric,
+    (invoice_data->>'net_total')::numeric,
+    invoice_data->>'payment_status',
+    invoice_data->>'type',
+    now()
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    date = EXCLUDED.date,
+    total_before_discount = EXCLUDED.total_before_discount,
+    total_discount = EXCLUDED.total_discount,
+    net_total = EXCLUDED.net_total,
+    payment_status = EXCLUDED.payment_status,
+    updated_at = now();
+
+  -- 2. Delete existing items for this invoice (to handle updates cleanly)
+  DELETE FROM invoice_items WHERE invoice_id = (invoice_data->>'id')::uuid;
+
+  -- 3. Insert new items from JSON array
+  IF jsonb_array_length(items_data) > 0 THEN
+    INSERT INTO invoice_items (
+      id, company_id, invoice_id, product_id, batch_id, 
+      quantity, bonus_quantity, unit_price, discount_percentage, line_total
+    )
+    SELECT 
+      (x->>'id')::uuid,
+      (x->>'company_id')::uuid,
+      (x->>'invoice_id')::uuid,
+      x->>'product_id',
+      x->>'batch_id',
+      (x->>'quantity')::numeric,
+      COALESCE((x->>'bonus_quantity')::numeric, 0),
+      (x->>'unit_price')::numeric,
+      COALESCE((x->>'discount_percentage')::numeric, 0),
+      COALESCE((x->>'line_total')::numeric, 0)
+    FROM jsonb_array_elements(items_data) x;
+  END IF;
+END;
+$$;
+
+-- 6. TRIGGERS
 create trigger handle_updated_at before update on settings for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on warehouses for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on representatives for each row execute procedure moddatetime (updated_at);
@@ -248,7 +301,7 @@ create trigger handle_updated_at before update on invoices for each row execute 
 create trigger handle_updated_at before update on purchase_invoices for each row execute procedure moddatetime (updated_at);
 create trigger handle_updated_at before update on cash_transactions for each row execute procedure moddatetime (updated_at);
 
--- 6. STORAGE
+-- 7. STORAGE
 insert into storage.buckets (id, name, public) values ('logos', 'logos', true) on conflict (id) do nothing;
 drop policy if exists "Logos Public" on storage.objects;
 drop policy if exists "Logos Upload" on storage.objects;
@@ -395,7 +448,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
                 <div className="relative">
                     <div className="absolute top-2 right-2 z-10">
                         <button onClick={copySQL} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded flex items-center gap-2 shadow-lg hover:scale-105 transition-transform">
-                            <Copy className="w-3 h-3" /> Copy SQL Script (v3)
+                            <Copy className="w-3 h-3" /> Copy SQL Script (v4)
                         </button>
                     </div>
                     <pre className="bg-slate-900 text-slate-300 p-4 rounded-xl text-xs overflow-x-auto font-mono h-96 border border-slate-700 shadow-inner relative">

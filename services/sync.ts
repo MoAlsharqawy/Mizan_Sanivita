@@ -68,12 +68,10 @@ class SyncService {
             // --- 3. BATCHES & STOCK ---
             else if (item.action_type === 'CREATE_BATCH' || item.action_type === 'ADJUST_STOCK') {
                 let batchData = payload;
-                // If it's an adjustment, we need the latest state of the batch from local DB
                 if (item.action_type === 'ADJUST_STOCK') {
                     const localBatch = await db.batches.get(payload.batchId);
                     if (localBatch) batchData = localBatch;
                     else {
-                        // Batch might be deleted locally? Skip.
                         await db.queue.update(item.id!, { status: 'SKIPPED' });
                         return;
                     }
@@ -165,10 +163,24 @@ class SyncService {
                 error = err;
             }
 
-            // --- 7. SALES INVOICES (COMPLEX) ---
+            // --- 7. SALES INVOICES (ATOMIC TRANSACTION via RPC) ---
             else if (item.action_type === 'CREATE_INVOICE') {
-                // A. Insert/Update Invoice Header
-                const { error: invErr } = await supabase.from('invoices').upsert({
+                
+                // Prepare Items for RPC
+                const itemsPayload = (payload.items || []).map((LineItem: any) => ({
+                    id: crypto.randomUUID(),
+                    company_id: companyId,
+                    invoice_id: payload.id,
+                    product_id: LineItem.product.id,
+                    batch_id: LineItem.batch.id,
+                    quantity: LineItem.quantity,
+                    bonus_quantity: LineItem.bonus_quantity || 0,
+                    unit_price: LineItem.unit_price || 0,
+                    discount_percentage: LineItem.discount_percentage || 0,
+                    line_total: 0
+                }));
+
+                const invoicePayload = {
                     id: payload.id,
                     company_id: companyId,
                     invoice_number: payload.invoice_number,
@@ -180,32 +192,19 @@ class SyncService {
                     payment_status: payload.payment_status,
                     type: payload.type,
                     updated_at: new Date().toISOString()
-                });
-                
-                if (invErr) {
-                    error = invErr;
-                } else if (payload.items && payload.items.length > 0) {
-                    // B. Handle Invoice Items
-                    // Strategy: Delete existing items for this invoice to prevent duplicates on update, then insert fresh.
-                    await supabase.from('invoice_items').delete().eq('invoice_id', payload.id);
+                };
 
-                    const itemsPayload = payload.items.map((LineItem: any) => ({
-                        id: crypto.randomUUID(), // Generate new UUID for the SQL row
-                        company_id: companyId,
-                        invoice_id: payload.id,
-                        product_id: LineItem.product.id,
-                        batch_id: LineItem.batch.id,
-                        quantity: LineItem.quantity,
-                        bonus_quantity: LineItem.bonus_quantity || 0,
-                        unit_price: LineItem.unit_price || 0,
-                        discount_percentage: LineItem.discount_percentage || 0,
-                        line_total: 0 // Calculated on fly usually, but schema has it
-                    }));
-                    
-                    const { error: itemsErr } = await supabase.from('invoice_items').insert(itemsPayload);
-                    if (itemsErr) {
-                        console.warn("Items sync warning:", itemsErr);
-                        // We don't block the whole sync if items fail, but it's risky.
+                // Call the Atomic Postgres Function
+                const { error: rpcError } = await supabase.rpc('upsert_full_invoice', {
+                    invoice_data: invoicePayload,
+                    items_data: itemsPayload
+                });
+
+                if (rpcError) {
+                    error = rpcError;
+                    // If RPC missing, log specific message
+                    if (rpcError.message.includes('function upsert_full_invoice') && rpcError.message.includes('does not exist')) {
+                        console.error("CRITICAL: SQL Function missing. Please run the script in Settings page.");
                     }
                 }
             } 
@@ -221,7 +220,7 @@ class SyncService {
                     total_amount: payload.total_amount,
                     paid_amount: payload.paid_amount,
                     type: payload.type,
-                    items: payload.items, // Stored as JSONB in SQL for simplicity in purchases
+                    items: payload.items,
                     updated_at: new Date().toISOString()
                 });
                 error = err;
@@ -235,26 +234,24 @@ class SyncService {
                     doctor_name: payload.doctorName,
                     representative_code: payload.representativeCode,
                     customer_ids: payload.customerIds,
-                    cycles: payload.cycles, // JSONB
+                    cycles: payload.cycles,
                     created_at: payload.createdAt || new Date().toISOString()
                 });
                 error = err;
             }
 
-            // --- ERROR HANDLING & COMPLETION ---
+            // --- ERROR HANDLING ---
             if (error) {
                 console.error(`❌ Sync Failed [${item.action_type}]:`, error);
                 
-                // Specific checks for "Table not found" or "Permission denied"
-                if (error.code === '42P01') { // undefined_table
+                if (error.code === '42P01') { 
                     localStorage.setItem('SYS_HEALTH', 'MISSING_TABLES');
                     window.dispatchEvent(new Event('sys-health-change'));
-                } else if (error.code === '42501') { // insufficient_privilege
+                } else if (error.code === '42501') {
                     localStorage.setItem('SYS_HEALTH', 'PERMISSION_DENIED');
                     window.dispatchEvent(new Event('sys-health-change'));
                 }
 
-                // If fatal error, mark failed and retry later
                 await db.queue.update(item.id!, { 
                     status: 'FAILED', 
                     error_log: JSON.stringify(error),
@@ -262,13 +259,10 @@ class SyncService {
                 });
             } else {
                 console.log(`✅ Synced: ${item.action_type}`);
-                
-                // If we successfully synced, clear any health flags
                 if (localStorage.getItem('SYS_HEALTH')) {
                     localStorage.removeItem('SYS_HEALTH');
                     window.dispatchEvent(new Event('sys-health-change'));
                 }
-                
                 await db.queue.update(item.id!, { status: 'SYNCED', error_log: undefined });
             }
 
@@ -280,7 +274,6 @@ class SyncService {
 
 export const syncService = new SyncService();
 
-// Trigger sync on load, online, and focus
 setInterval(() => syncService.sync(), 5000); 
 window.addEventListener('online', () => syncService.sync());
 window.addEventListener('focus', () => syncService.sync());

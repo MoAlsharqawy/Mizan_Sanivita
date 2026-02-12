@@ -1,4 +1,5 @@
 
+
 import Dexie, { Table } from 'dexie';
 import {
   Product,
@@ -50,19 +51,20 @@ const DEFAULT_SETTINGS: SystemSettings = {
 };
 
 class MizanDatabase extends Dexie {
-    products!: Table<Product>;
-    batches!: Table<Batch>;
-    customers!: Table<Customer>;
-    suppliers!: Table<Supplier>;
-    representatives!: Table<Representative>;
-    warehouses!: Table<Warehouse>;
-    invoices!: Table<Invoice>;
-    purchaseInvoices!: Table<PurchaseInvoice>;
-    cashTransactions!: Table<CashTransaction>;
-    deals!: Table<Deal>;
-    activityLogs!: Table<ActivityLog>;
-    settings!: Table<SystemSettings & { id: string }>;
-    queue!: Table<QueueItem>;
+    // Explicit Table Definitions to avoid 'any'
+    products!: Table<Product, string>;
+    batches!: Table<Batch, string>;
+    customers!: Table<Customer, string>;
+    suppliers!: Table<Supplier, string>;
+    representatives!: Table<Representative, string>;
+    warehouses!: Table<Warehouse, string>;
+    invoices!: Table<Invoice, string>;
+    purchaseInvoices!: Table<PurchaseInvoice, string>;
+    cashTransactions!: Table<CashTransaction, string>;
+    deals!: Table<Deal, string>;
+    activityLogs!: Table<ActivityLog, string>;
+    settings!: Table<SystemSettings & { id: string }, string>;
+    queue!: Table<QueueItem, number>;
 
     constructor() {
         super('MizanOnlineDB');
@@ -117,8 +119,6 @@ class MizanDatabase extends Dexie {
     async updateSettings(s: SystemSettings) {
         await this.settings.put({ ...s, id: 'config' });
         await this.logActivity('UPDATE', 'STOCK', 'Updated system settings');
-        // We generally don't sync local UI settings like printer paper size to cloud DB in this simple version
-        // unless you want to persist company info.
         await this.addToQueue('UPDATE_SETTINGS', s); 
     }
 
@@ -134,8 +134,6 @@ class MizanDatabase extends Dexie {
             timestamp: new Date().toISOString()
         };
         await this.activityLogs.add(log);
-        // Logs are usually high volume, optional to sync, but good for audit
-        // await this.addToQueue('CREATE_LOG', log);
     }
 
     async getProductsWithBatches(): Promise<ProductWithBatches[]> {
@@ -216,9 +214,7 @@ class MizanDatabase extends Dexie {
                 });
             }
 
-            // TRIGGER SYNC
             await this.addToQueue('CREATE_INVOICE', invoice);
-            
             return { success: true, message: 'Saved successfully', id };
         }).catch((e: any) => ({ success: false, message: e.message }));
     }
@@ -247,7 +243,6 @@ class MizanDatabase extends Dexie {
                             selling_price: item.selling_price
                         });
                     } else {
-                        // New Batch
                         const newBatch = {
                             id: crypto.randomUUID(), product_id: item.product_id, warehouse_id: item.warehouse_id,
                             batch_number: item.batch_number, quantity: item.quantity,
@@ -255,7 +250,6 @@ class MizanDatabase extends Dexie {
                             expiry_date: item.expiry_date, status: BatchStatus.ACTIVE
                         };
                         await this.batches.add(newBatch);
-                        // TRIGGER SYNC for new batch creation
                         await this.addToQueue('CREATE_BATCH', newBatch);
                     }
                 }
@@ -284,8 +278,6 @@ class MizanDatabase extends Dexie {
             };
             
             await this.purchaseInvoices.add(invoice);
-            
-            // TRIGGER SYNC
             await this.addToQueue('CREATE_PURCHASE', invoice);
 
             return { success: true, message: 'Saved successfully' };
@@ -300,9 +292,7 @@ class MizanDatabase extends Dexie {
             if (newQty < 0) throw new Error("Stock cannot be negative");
             await this.batches.update(batchId, { quantity: newQty });
             
-            // Sync Adjustment
             await this.addToQueue('ADJUST_STOCK', { batchId, quantity: newQty });
-            
             await this.logActivity('ADJUSTMENT', 'STOCK', `Batch ${batch.batch_number}: ${adjustmentQty > 0 ? '+' : ''}${adjustmentQty}. ${reason}`);
             return { success: true, message: 'Stock adjusted' };
         }).catch((e: any) => ({ success: false, message: e.message }));
@@ -315,22 +305,18 @@ class MizanDatabase extends Dexie {
             if (sourceBatch.quantity < quantity) throw new Error("Insufficient Quantity");
 
             await this.batches.update(batchId, { quantity: sourceBatch.quantity - quantity });
-            // Sync Source
             await this.addToQueue('ADJUST_STOCK', { batchId, quantity: sourceBatch.quantity - quantity });
 
-            // Check if exact batch exists in target
             const targetBatch = await this.batches.where({ product_id: sourceBatch.product_id, warehouse_id: targetWarehouseId, batch_number: sourceBatch.batch_number }).first();
             
             if (targetBatch) {
                 await this.batches.update(targetBatch.id, { quantity: targetBatch.quantity + quantity });
-                // Sync Target Update
                 await this.addToQueue('ADJUST_STOCK', { batchId: targetBatch.id, quantity: targetBatch.quantity + quantity });
             } else {
                 const newBatch = {
                     ...sourceBatch, id: crypto.randomUUID(), warehouse_id: targetWarehouseId, quantity: quantity
                 };
                 await this.batches.add(newBatch);
-                // Sync New Target Batch
                 await this.addToQueue('CREATE_BATCH', newBatch);
             }
             return { success: true, message: 'Transfer Successful' };
@@ -386,8 +372,6 @@ class MizanDatabase extends Dexie {
                 delete updates.productTargets;
             }
             await this.deals.update(id, updates);
-            
-            // Fetch updated for sync
             const updatedDeal = await this.deals.get(id);
             await this.addToQueue('UPDATE_DEAL', updatedDeal);
         });
@@ -405,7 +389,6 @@ class MizanDatabase extends Dexie {
             const cycles = [newCycle, ...(deal.cycles || [])];
             await this.deals.update(id, { cycles });
             
-            // Sync
             const updatedDeal = await this.deals.get(id);
             await this.addToQueue('UPDATE_DEAL', updatedDeal);
 
@@ -438,7 +421,6 @@ class MizanDatabase extends Dexie {
                 updates.current_balance = c.current_balance + diff;
             }
             await this.customers.update(id, updates);
-            
             const updated = await this.customers.get(id);
             await this.addToQueue('UPDATE_CUSTOMER', updated);
         });
@@ -462,7 +444,6 @@ class MizanDatabase extends Dexie {
             await this.products.add(product);
             await this.batches.add(batch);
             
-            // Sync both
             await this.addToQueue('CREATE_PRODUCT', product);
             await this.addToQueue('CREATE_BATCH', batch);
         });
@@ -486,7 +467,6 @@ class MizanDatabase extends Dexie {
                 if (c) {
                     const change = tx.type === 'RECEIPT' ? -tx.amount : tx.amount;
                     await this.customers.update(c.id, { current_balance: c.current_balance + change });
-                    // Sync Balance update
                     const updatedC = await this.customers.get(c.id);
                     await this.addToQueue('UPDATE_CUSTOMER', updatedC);
                 }
@@ -495,7 +475,6 @@ class MizanDatabase extends Dexie {
                 if (s) {
                     const change = tx.type === 'EXPENSE' ? -tx.amount : tx.amount;
                     await this.suppliers.update(s.id, { current_balance: s.current_balance + change });
-                    // We assume update supplier logic is similar, though explicit sync might be needed if you added Update Supplier logic
                 }
             }
         }
@@ -505,23 +484,32 @@ class MizanDatabase extends Dexie {
         return { success: false, message: "Edit not supported in this version to protect integrity." };
     }
 
-    private async generateSequence(prefix: string, table: string, key: string): Promise<string> {
+    // --- OPTIMIZED SEQUENCE GENERATION ---
+    private async generateSequence(prefix: string, table: keyof MizanDatabase, key: string): Promise<string> {
         const now = new Date();
         const year = now.getFullYear().toString().slice(-2);
         const month = (now.getMonth() + 1).toString().padStart(2, '0');
         const pattern = `${prefix}${year}${month}-`;
-        const items = await (this as any)[table].toArray(); 
-        let maxSeq = 0;
-        items.forEach((item: any) => {
-            if (item[key] && item[key].startsWith(pattern)) {
-                const parts = item[key].split('-');
-                if (parts.length > 1) {
-                    const seq = parseInt(parts[1]);
-                    if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
+        
+        // OPTIMIZED: Use index query instead of toArray()
+        // This requires 'key' to be an index in the Dexie definition (which it is for invoices, purchaseInvoices, cashTransactions)
+        const lastRecord = await ((this as any).table(table as string) as any)
+            .where(key)
+            .startsWith(pattern)
+            .last();
+
+        let nextSeq = 1;
+        if (lastRecord && lastRecord[key]) {
+            const parts = lastRecord[key].split('-');
+            if (parts.length > 1) {
+                const currentSeq = parseInt(parts[1]);
+                if (!isNaN(currentSeq)) {
+                    nextSeq = currentSeq + 1;
                 }
             }
-        });
-        return `${pattern}${maxSeq + 1}`;
+        }
+        
+        return `${pattern}${nextSeq}`;
     }
 
     async resetDatabase() { await (this as any).delete(); window.location.reload(); }
