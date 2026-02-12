@@ -7,8 +7,9 @@ import {
   Wifi, Shield, Database, Download, Upload, 
   Trash2, Monitor, Printer, Globe, CreditCard, 
   CheckCircle2, AlertTriangle, RefreshCw, Copy, 
-  ChevronRight, LayoutDashboard, Terminal 
+  ChevronRight, LayoutDashboard, Terminal, FileSpreadsheet, AlertCircle
 } from 'lucide-react';
+import { DataImport } from '../components/DataImport';
 
 // --- SQL SCRIPT (Preserved for System Health) ---
 const SQL_SCRIPT = `
@@ -300,7 +301,7 @@ create policy "Logos Upload" on storage.objects for insert with check ( bucket_i
 `;
 
 // Types for UI Sections
-type SettingsSection = 'general' | 'preferences' | 'invoice' | 'data' | 'system';
+type SettingsSection = 'general' | 'preferences' | 'invoice' | 'data' | 'system' | 'import';
 
 export default function Settings() {
   const [activeSection, setActiveSection] = useState<SettingsSection>('general');
@@ -393,9 +394,12 @@ export default function Settings() {
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2 mt-6">المبيعات</div>
             <SidebarItem id="invoice" icon={FileText} label="قوالب الفواتير" />
             
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2 mt-6">البيانات</div>
+            <SidebarItem id="import" icon={FileSpreadsheet} label="استيراد Excel" />
+            <SidebarItem id="data" icon={Database} label="النسخ الاحتياطي" danger />
+
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 mb-2 mt-6">النظام</div>
             <SidebarItem id="system" icon={Terminal} label="الربط السحابي" />
-            <SidebarItem id="data" icon={Database} label="النسخ الاحتياطي" danger />
           </nav>
         </div>
       </aside>
@@ -412,12 +416,13 @@ export default function Settings() {
                 {activeSection === 'preferences' && 'تفضيلات النظام'}
                 {activeSection === 'invoice' && 'إعدادات الفواتير'}
                 {activeSection === 'data' && 'إدارة البيانات'}
+                {activeSection === 'import' && 'استيراد البيانات'}
                 {activeSection === 'system' && 'حالة النظام والسحابة'}
               </h1>
               <p className="text-sm text-gray-500 mt-1">قم بتعديل وتخصيص إعدادات التطبيق الخاصة بك</p>
             </div>
             
-            {activeSection !== 'system' && activeSection !== 'data' && (
+            {activeSection !== 'system' && activeSection !== 'data' && activeSection !== 'import' && (
               <button 
                 onClick={handleSave} 
                 disabled={loading}
@@ -594,7 +599,25 @@ export default function Settings() {
               </div>
             )}
 
-            {/* --- 4. DATA MANAGEMENT --- */}
+            {/* --- 4. IMPORT DATA (NEW) --- */}
+            {activeSection === 'import' && (
+                <div className="space-y-6">
+                    <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg flex gap-3">
+                        <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
+                        <div>
+                            <h4 className="font-bold text-blue-800">تعليمات هامة</h4>
+                            <ul className="text-sm text-blue-700 list-disc list-inside mt-1 space-y-1">
+                                <li>قم أولاً بتحميل النموذج (Template) لضمان تطابق أسماء الأعمدة.</li>
+                                <li>لا تقم بتغيير عناوين الأعمدة في ملف Excel.</li>
+                                <li>تأكد من عدم تكرار "كود المنتج" لتجنب المشاكل.</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <DataImport />
+                </div>
+            )}
+
+            {/* --- 5. DATA MANAGEMENT --- */}
             {activeSection === 'data' && (
               <div className="space-y-6 animate-in fade-in">
                 
@@ -672,7 +695,7 @@ export default function Settings() {
               </div>
             )}
 
-            {/* --- 5. SYSTEM & CLOUD --- */}
+            {/* --- 6. SYSTEM & CLOUD --- */}
             {activeSection === 'system' && (
                <div className="space-y-6 animate-in fade-in">
                   
