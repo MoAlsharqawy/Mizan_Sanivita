@@ -14,7 +14,7 @@ import { UsersManager } from '../components/UsersManager';
 
 // --- SQL SCRIPT (Preserved for System Health) ---
 const SQL_SCRIPT = `
--- ⚡ MIZAN ONLINE: SMART MIGRATION SCRIPT (v4.2 - Safe Profiles Update)
+-- ⚡ MIZAN ONLINE: SMART MIGRATION SCRIPT (v4.3 - Safe Profiles Update & Settings)
 -- Run this in Supabase SQL Editor. It is safe to run even if tables exist.
 
 -- 1. EXTENSIONS
@@ -43,11 +43,15 @@ create table if not exists public.settings (
   company_address text,
   company_phone text,
   tax_number text,
+  cr_number text,  -- Added CR Number
   currency text default 'SAR',
   logo_url text,
   invoice_template text,
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
+
+-- SAFELY ADD COLUMNS TO SETTINGS IF MISSING
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS cr_number text;
 
 create table if not exists public.warehouses (
   id uuid primary key,
@@ -510,6 +514,16 @@ export default function Settings() {
                       className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
                     />
                   </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">رقم السجل التجاري</label>
+                    <input 
+                      type="text" 
+                      value={settings.companyCrNumber || ''}
+                      onChange={e => setSettings({...settings, companyCrNumber: e.target.value})}
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
+                      placeholder="اختياري"
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -735,7 +749,7 @@ export default function Settings() {
                       <div className="bg-slate-800 px-6 py-4 flex justify-between items-center border-b border-slate-700">
                           <div className="flex items-center gap-3">
                               <Terminal className="w-5 h-5 text-emerald-400" />
-                              <span className="font-mono font-bold text-white">System Repair Script (v4.2 - Safe)</span>
+                              <span className="font-mono font-bold text-white">System Repair Script (v4.3 - Safe)</span>
                           </div>
                           <button 
                             onClick={() => {

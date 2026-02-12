@@ -45,6 +45,7 @@ class SyncService {
                     company_address: payload.companyAddress,
                     company_phone: payload.companyPhone,
                     tax_number: payload.companyTaxNumber,
+                    cr_number: payload.companyCrNumber, // Added CR Number map
                     currency: payload.currency,
                     logo_url: payload.companyLogo,
                     invoice_template: payload.invoiceTemplate,

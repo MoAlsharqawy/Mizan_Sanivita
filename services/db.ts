@@ -29,6 +29,7 @@ export interface SystemSettings {
   companyAddress: string;
   companyPhone: string;
   companyTaxNumber: string;
+  companyCrNumber: string; // Added CR Number
   companyLogo?: string;
   currency: string;
   language: string;
@@ -41,6 +42,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
     companyAddress: 'Cairo, Egypt',
     companyPhone: '01559550481',
     companyTaxNumber: '123-456-789',
+    companyCrNumber: '', // Default empty
     companyLogo: '',
     currency: 'ج.م',
     language: 'ar',
